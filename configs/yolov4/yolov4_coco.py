@@ -12,7 +12,16 @@ test_cfg = dict(
 optimizer = dict(type='SGD', lr=0.01, momentum=0.93, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0))
-optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+optimizer_config = dict(
+    type='Fp16GradAccumulateOptimizerHook',
+    distributed=False,
+    accumulation=2,
+    loss_scale=1024.,
+    grad_clip=dict(max_norm=35, norm_type=2),
+)
+
+# optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
@@ -27,6 +36,24 @@ log_config = dict(
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
     ])
+
+custom_hooks = [
+    dict(
+        type='LrBiasPreHeatHook',
+        preheat_iters=2000,
+        preheat_ratio=10.,
+        priority='NORMAL'
+    ),
+    dict(
+        type='YOLOV4EMAHook',
+        momentum=0.9999,
+        interval=1,
+        warm_up=2000,
+        resume_from=None,
+        priority='HIGH'
+    )
+]
+
 total_epochs = 300
 evaluation = dict(interval=1, metric=['bbox'])
-fp16 = dict(loss_scale=512.)
+# fp16 = dict(loss_scale=512.)
