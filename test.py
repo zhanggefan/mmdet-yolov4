@@ -1,9 +1,11 @@
 from mmdet.models.necks import PACSPFPN
 from mmdet.models import DarknetCSP
 from mmdet.models.dense_heads import YOLOV4Head
+from mmdet.models.detectors import YOLOV4
 
 from mmdet.models.detectors import SingleStageDetector
 from mmcv import Config
+from mmcv.parallel import MMDataParallel
 
 from mmdet.datasets import build_dataloader, build_dataset
 from mmdet.apis import train_detector, single_gpu_test
@@ -11,66 +13,74 @@ import tqdm
 import torch
 from torch.nn.modules.batchnorm import _BatchNorm
 
+
 # torch.backends.cudnn.deterministic = False
 # torch.backends.cudnn.benchmark = True
 
 
-class s5p(SingleStageDetector):
-    def __init__(self):
-        super(SingleStageDetector, self).__init__()
-        self.backbone = DarknetCSP('s5p', out_indices=[3, 4, 5])
-        self.neck = PACSPFPN([128, 256, 512], [128, 256, 512], csp_repetition=1)
-        self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[128, 256, 512], test_cfg=cfg.test_cfg)
+# class s5p(SingleStageDetector):
+#     def __init__(self):
+#         super(SingleStageDetector, self).__init__()
+#         self.backbone = DarknetCSP('s5p', out_indices=[3, 4, 5])
+#         self.neck = PACSPFPN([128, 256, 512], [128, 256, 512], csp_repetition=1)
+#         self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[128, 256, 512], test_cfg=cfg.test_cfg)
 
 
-class m5p(SingleStageDetector):
-    def __init__(self):
-        super(SingleStageDetector, self).__init__()
-        self.backbone = DarknetCSP('m5p', out_indices=[3, 4, 5])
-        self.neck = PACSPFPN([192, 384, 768], [192, 384, 768], csp_repetition=1)
-        self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[192, 384, 768], test_cfg=cfg.test_cfg)
+# class m5p(SingleStageDetector):
+#     def __init__(self):
+#         super(SingleStageDetector, self).__init__()
+#         self.backbone = DarknetCSP('m5p', out_indices=[3, 4, 5])
+#         self.neck = PACSPFPN([192, 384, 768], [192, 384, 768], csp_repetition=1)
+#         self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[192, 384, 768], test_cfg=cfg.test_cfg)
 
 
-class l5p(SingleStageDetector):
-    def __init__(self):
-        super(SingleStageDetector, self).__init__()
-        self.backbone = DarknetCSP('l5p', out_indices=[3, 4, 5])
-        self.neck = PACSPFPN([256, 512, 1024], [256, 512, 1024], csp_repetition=2)
-        self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[256, 512, 1024], test_cfg=cfg.test_cfg)
+# class l5p(SingleStageDetector):
+#     def __init__(self):
+#         super(SingleStageDetector, self).__init__()
+#         self.backbone = DarknetCSP('l5p', out_indices=[3, 4, 5])
+#         self.neck = PACSPFPN([256, 512, 1024], [256, 512, 1024], csp_repetition=2)
+#         self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[256, 512, 1024], test_cfg=cfg.test_cfg)
 
 
-class x5p(SingleStageDetector):
-    def __init__(self):
-        super(SingleStageDetector, self).__init__()
-        self.backbone = DarknetCSP('x5p', out_indices=[3, 4, 5])
-        self.neck = PACSPFPN([320, 640, 1280], [320, 640, 1280], csp_repetition=3)
-        self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[320, 640, 1280], test_cfg=cfg.test_cfg)
+# class x5p(SingleStageDetector):
+#     def __init__(self):
+#         super(SingleStageDetector, self).__init__()
+#         self.backbone = DarknetCSP('x5p', out_indices=[3, 4, 5])
+#         self.neck = PACSPFPN([320, 640, 1280], [320, 640, 1280], csp_repetition=3)
+#         self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[320, 640, 1280], test_cfg=cfg.test_cfg)
 
 
 cfg = Config.fromfile('configs/yolov4/yolov4_coco.py')
 # cfg.data.workers_per_gpu = 0
 cfg.gpu_ids = range(1)
 cfg.seed = 0
-cfg.work_dir = 'work_dirs/yolov4/yolov4_20201016'
+cfg.work_dir = 'work_dirs/yolov4/yolov4_20201018'
 
-model = s5p()
+model = YOLOV4(
+    backbone = dict(type='DarknetCSP', scale='s5p', out_indices=[3, 4, 5]),
+    neck = dict(type='PACSPFPN', in_channels=[128, 256, 512], out_channels=[128, 256, 512], csp_repetition=1),
+    bbox_head = dict(type='YOLOV4Head', num_classes=80, in_channels=[128, 256, 512]),
+    test_cfg = cfg.test_cfg,
+    use_amp=True
+)
 model.init_weights()
 
-cfg.resume_from = 'work_dirs/yolov4/yolov4_20201016/epoch_55.pth'
-# model.load_state_dict(torch.load("work_dirs/yolov4/yolov4_20201016/epoch_55.pth")['state_dict'], strict=False)
+# cfg.resume_from = 'work_dirs/yolov4/yolov4_20201018/epoch_6.pth'
+# cfg.custom_hooks[1].resume_from = cfg.resume_from
+# model.load_state_dict(torch.load("work_dirs/yolov4/yolov4_20201018/epoch_6.pth")['state_dict'], strict=False)
 
 # testing -----------------------------------------------------------------
 # dataset = build_dataset(cfg.data.val, dict(test_mode=True))
 # dataloader = build_dataloader(
 #     dataset,
 #     samples_per_gpu=1,
-#     workers_per_gpu=3,
+#     workers_per_gpu=4,
 #     dist=False,
 #     shuffle=False)
 # model.eval()
 # model.CLASSES = dataset.CLASSES
 # model = MMDataParallel(model)
-# single_gpu_test(model, dataloader, True, show_score_thr=0.1)
+# single_gpu_test(model, dataloader, False, show_score_thr=0.001)
 # testing -----------------------------------------------------------------
 
 

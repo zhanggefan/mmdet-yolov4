@@ -15,8 +15,9 @@ from mmdet.models.backbones.darknetcsp import Mish
 from ..builder import HEADS, build_loss
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
-from ..losses.iou_loss import ciou_loss, giou_loss
+from ..losses import reduce_loss
 import math
+from torch.cuda.amp import autocast
 
 
 @HEADS.register_module()
@@ -59,7 +60,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                  one_hot_smoother=0.,
                  conv_cfg=None,
                  norm_cfg=dict(type='BN', requires_grad=True),
-                 act_cfg=dict(type='Mish', negative_slope=0.1),
+                 act_cfg=dict(type='Mish'),
                  loss_cls=dict(
                      type='CrossEntropyLoss',
                      use_sigmoid=True,
@@ -85,6 +86,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         self.assigner = None
         self.shape_match_thres = 4.
         self.conf_iou_loss_ratio = 1.
+        self.conf_level_balance_weight = [4.0, 1.0, 0.4, 0.1, 0.1]
         if self.train_cfg:
             if hasattr(self.train_cfg, 'assigner'):
                 self.assigner = build_assigner(self.train_cfg.assigner)
@@ -94,6 +96,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 sampler_cfg = dict(type='PseudoSampler')
             if hasattr(self.train_cfg, 'conf_iou_loss_ratio'):
                 self.conf_iou_loss_ratio = self.train_cfg.conf_iou_loss_ratio
+            if hasattr(self.train_cfg, 'conf_level_balance_weight'):
+                self.conf_level_balance_weight = self.train_cfg.conf_level_balance_weight
             self.sampler = build_sampler(sampler_cfg, context=self)
             self.shape_match_thres = self.train_cfg.get('shape_match_thres', 4.)
 
@@ -109,6 +113,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         self.loss_cls = build_loss(loss_cls)
         self.loss_conf = build_loss(loss_conf)
         self.loss_bbox = build_loss(loss_bbox)
+        self.loss_bbox_weight = self.loss_bbox.loss_weight
+        self.loss_bbox.loss_weight = 1.
 
         self.num_anchors = self.anchor_generator.num_base_anchors
         self._init_layers()
@@ -163,7 +169,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         return tuple(pred_maps),
 
-    @force_fp32(apply_to=('pred_maps',))
+    # @force_fp32(apply_to=('pred_maps',))
     def get_bboxes(self,
                    pred_maps,
                    img_metas,
@@ -191,16 +197,17 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 (n,) tensor where each item is the predicted class label of the
                 corresponding box.
         """
-        result_list = []
-        num_levels = len(pred_maps)
-        for img_id in range(len(img_metas)):
-            pred_maps_list = [
-                pred_maps[i][img_id].detach() for i in range(num_levels)
-            ]
-            scale_factor = img_metas[img_id]['scale_factor']
-            proposals = self._get_bboxes_single(pred_maps_list, scale_factor,
-                                                cfg, rescale, with_nms)
-            result_list.append(proposals)
+        with autocast(enabled=False):
+            result_list = []
+            num_levels = len(pred_maps)
+            for img_id in range(len(img_metas)):
+                pred_maps_list = [
+                    pred_maps[i][img_id].detach() for i in range(num_levels)
+                ]
+                scale_factor = img_metas[img_id]['scale_factor']
+                proposals = self._get_bboxes_single(pred_maps_list, scale_factor,
+                                                    cfg, rescale, with_nms)
+                result_list.append(proposals)
         return result_list
 
     def _get_bboxes_single(self,
@@ -311,7 +318,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             return (multi_lvl_bboxes, multi_lvl_cls_scores,
                     multi_lvl_conf_scores)
 
-    # @force_fp32(apply_to=('pred_maps',))
+    @force_fp32(apply_to=('pred_maps',))
     def loss(self,
              pred_maps,
              gt_bboxes,
@@ -334,48 +341,55 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        device = pred_maps[0][0].device
+        with autocast(enabled=False):
 
-        featmap_sizes = [
-            pred_maps[i].shape[-2:] for i in range(self.num_levels)
-        ]
+            pred_maps = [p.float() for p in pred_maps]
 
-        responsible_indices = []
-        for img_id in range(len(img_metas)):
-            responsible_indices.append(
-                self.anchor_generator.responsible_indices(
-                    featmap_sizes,
-                    gt_bboxes[img_id],
-                    neighbor=2 if self.assigner is None else 3,
-                    shape_match_thres=self.shape_match_thres,
-                    device=device))
+            device = pred_maps[0][0].device
 
-        if self.assigner is None:
-            results = self.get_targets_no_assigner(responsible_indices, gt_bboxes, gt_labels)
+            featmap_sizes = [
+                pred_maps[i].shape[-2:] for i in range(self.num_levels)
+            ]
 
-            (mlvl_pos_indices, mlvl_gt_bboxes_targets, mlvl_gt_labels_targets) = results
+            responsible_indices = self.anchor_generator.responsible_indices(
+                featmap_sizes,
+                gt_bboxes,
+                neighbor=2 if self.assigner is None else 3,
+                shape_match_thres=self.shape_match_thres,
+                device=device)
 
-            mlvl_anchors = self.anchor_generator.grid_anchors(featmap_sizes, device)
+            if self.assigner is None:
+                results = self.get_targets_no_assigner(responsible_indices, gt_bboxes, gt_labels)
 
-            losses_cls, losses_conf, losses_bbox = multi_apply(
-                self.loss_single_no_assigner,
-                pred_maps,
-                mlvl_anchors,
-                self.featmap_strides,
-                mlvl_pos_indices,
-                mlvl_gt_bboxes_targets,
-                mlvl_gt_labels_targets
-            )
-        else:
-            raise NotImplementedError
+                (mlvl_pos_indices, mlvl_gt_bboxes_targets, mlvl_gt_labels_targets) = results
 
-        balance_conf = [4.0, 1.0, 0.4, 0.1, 0.1]
-        losses_conf = [loss_conf * balance for loss_conf, balance in zip(losses_conf, balance_conf)]
+                mlvl_anchors = self.anchor_generator.grid_anchors(featmap_sizes, device)
+
+                losses_cls, losses_conf, losses_bbox = multi_apply(
+                    self.loss_single_no_assigner,
+                    pred_maps,
+                    mlvl_anchors,
+                    self.featmap_strides,
+                    mlvl_pos_indices,
+                    mlvl_gt_bboxes_targets,
+                    mlvl_gt_labels_targets
+                )
+            else:
+                raise NotImplementedError
+
+            losses_conf = [loss_conf * balance for loss_conf, balance in
+                           zip(losses_conf, self.conf_level_balance_weight)]
+
+            # lcls, lbox, lobj = compute_loss(pred_maps, img_metas, gt_bboxes, gt_labels)
 
         return dict(
-            loss_cls=losses_cls * len(img_metas),
-            loss_conf=losses_conf * len(img_metas),
-            loss_bbox=losses_bbox * len(img_metas))
+            loss_cls=losses_cls,
+            # l_cls=lcls * len(img_metas),
+            loss_conf=losses_conf,
+            # l_conf=lobj * len(img_metas),
+            loss_bbox=losses_bbox,
+            # l_bbox=lbox * len(img_metas),
+        )
 
     def loss_single_no_assigner(self,
                                 pred_map,
@@ -428,7 +442,9 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             pred_bbox_wh = (pred_bbox[..., 2:] * 2) ** 2
             pred_bbox = self.bbox_coder.decode(anchor_pos, torch.cat((pred_bbox_xy, pred_bbox_wh), dim=-1), stride)
 
-            loss_bbox += self.loss_bbox(pred_bbox, target_bboxes)
+            giou_loss = self.loss_bbox(pred_bbox, target_bboxes, reduction_override='none')
+
+            loss_bbox += reduce_loss(giou_loss, reduction=self.loss_bbox.reduction)
 
             pred_cls = pred_map_pos[..., 5:]
             target_cls = target_labels
@@ -436,11 +452,11 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             loss_cls += self.loss_cls(pred_cls, target_cls)
 
             target_conf[pos_indices] = (1 - self.conf_iou_loss_ratio) + self.conf_iou_loss_ratio * (
-                    1 - giou_loss(pred_bbox, target_bboxes, reduction='none')).detach().clamp(0).type(target_conf.dtype)
+                    1 - giou_loss).detach().clamp(0.0, 1.0).type(target_conf.dtype)
 
         loss_conf = self.loss_conf(pred_conf, target_conf)
 
-        return loss_cls, loss_conf, loss_bbox
+        return loss_cls * num_imgs, loss_conf * num_imgs, loss_bbox * self.loss_bbox_weight * num_imgs
 
     def get_targets_no_assigner(self,
                                 responsible_indices_list,
@@ -449,9 +465,10 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         """Compute target maps for anchors in multiple images.
 
         Args:
-            responsible_indices_list (list[list[Tensor]]): Multi level responsible
-                indices of each image. Each element is a tensor of shape
-                (m, 2), where m stands for the number of matches
+            responsible_indices_list ([list[tuple[Tensor]]]): Multi level responsible
+                indices. Each element is a tuple of 3 tensors of shape (m,),
+                    (img_id, anchor_id, img_gt_id)
+                where m stands for the number of matches
             gt_bboxes_list (list[Tensor]): Ground truth bboxes of each image.
             gt_labels_list (list[Tensor]): Ground truth labels of each box.
 
@@ -464,28 +481,20 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 - mlvl_gt_labels_targets (list[Tensor]): Gt label corresponds
                     to the aforementioned indices.
         """
-        num_imgs = len(gt_bboxes_list)
+
         mlvl_pos_indices = [None for _ in range(self.num_levels)]
         mlvl_gt_bboxes_targets = [None for _ in range(self.num_levels)]
         mlvl_gt_labels_targets = [None for _ in range(self.num_levels)]
 
+        gt_bboxes = torch.cat(gt_bboxes_list, dim=0)
+        gt_labels = torch.cat(gt_labels_list, dim=0)
+
         for lvl in range(self.num_levels):
-            img_indices = []
-            anchor_indices = []
-            gt_labels_targets = []
-            gt_bboxes_targets = []
-            for img_ind in range(num_imgs):
-                anchor_ind, gt_ind = responsible_indices_list[img_ind][lvl]
-                anchor_indices.append(anchor_ind)
-                img_indices.append(anchor_ind.new_full(anchor_ind.shape, img_ind))
-                gt_bboxes_targets.append(gt_bboxes_list[img_ind][gt_ind])
-                gt_labels_targets.append(gt_labels_list[img_ind][gt_ind])
+            img_ind, anchor_ind, gt_ind = responsible_indices_list[lvl]
 
-            mlvl_pos_indices[lvl] = (torch.cat(img_indices, dim=0),
-                                     torch.cat(anchor_indices, dim=0))
-
-            mlvl_gt_bboxes_targets[lvl] = torch.cat(gt_bboxes_targets, dim=0)
-            gt_labels_targets = torch.cat(gt_labels_targets, dim=0)
+            mlvl_pos_indices[lvl] = (img_ind, anchor_ind)
+            mlvl_gt_bboxes_targets[lvl] = gt_bboxes[gt_ind]
+            gt_labels_targets = gt_labels[gt_ind]
 
             gt_labels_targets = F.one_hot(
                 gt_labels_targets, num_classes=self.num_classes).float()
@@ -514,3 +523,187 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             list[ndarray]: bbox results of each class
         """
         return self.aug_test_bboxes(feats, img_metas, rescale=rescale)
+
+#
+# # following code are moved here for comparison only
+#
+#
+# def compute_loss(p, img_metas, gt_bboxes_list, gt_labels_list):  # predictions, targets, model
+#
+#     tgt = []
+#     for i in range(len(gt_bboxes_list)):
+#         h, w = img_metas[i]['pad_shape'][:2]
+#         num_gt = gt_bboxes_list[i].shape[0]
+#         gt_bboxes_list[i] /= torch.tensor([w, h, w, h]).cuda()
+#         gt_xy = (gt_bboxes_list[i][:, :2] + gt_bboxes_list[i][:, 2:]) / 2
+#         gt_wh = gt_bboxes_list[i][:, 2:] - gt_bboxes_list[i][:, :2]
+#         img_id = gt_wh.new_full((num_gt, 1), i)
+#         tgt.append(torch.cat([img_id, gt_labels_list[i][:, None], gt_xy, gt_wh], dim=-1))
+#     targets = torch.cat(tgt, dim=0)
+#
+#     device = targets.device
+#     ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
+#     lcls, lbox, lobj = ft([0]).to(device), ft([0]).to(device), ft([0]).to(device)
+#     tcls, tbox, indices, anchors = build_targets(p, targets)  # targets
+#
+#     red = 'mean'  # Loss reduction (sum or mean)
+#
+#     # Define criteria
+#     BCEcls = nn.BCEWithLogitsLoss(pos_weight=ft([1.0]), reduction=red).to(device)
+#     BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([1.0]), reduction=red).to(device)
+#
+#     # class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
+#     cp, cn = 1.0, 0.0
+#
+#     # per output
+#     nt = 0  # number of targets
+#     np = len(p)  # number of outputs
+#     balance = [4.0, 1.0, 0.4] if np == 3 else [4.0, 1.0, 0.4, 0.1]  # P3-5 or P3-6
+#     for i, pi in enumerate(p):  # layer index, layer predictions
+#         bs, _, h, w = pi.shape
+#         pi = pi.reshape(bs, 3, -1, h, w).permute(0, 1, 3, 4, 2).contiguous()
+#         b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
+#         tobj = torch.zeros_like(pi[..., 0]).to(device)  # target obj
+#
+#         nb = b.shape[0]  # number of targets
+#         if nb:
+#             nt += nb  # cumulative targets
+#             ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
+#
+#             # GIoU
+#             pxy = ps[:, :2].sigmoid() * 2. - 0.5
+#             pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
+#             pbox = torch.cat((pxy, pwh), 1).to(device)  # predicted box
+#             giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou(prediction, target)
+#             lbox += (1.0 - giou).mean()  # giou loss
+#
+#             # Obj
+#             tobj[b, a, gj, gi] = giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
+#
+#             t = torch.full_like(ps[:, 5:], cn).to(device)  # targets
+#             t[range(nb), tcls[i]] = cp
+#             lcls += BCEcls(ps[:, 5:], t)  # BCE
+#
+#             # Append targets to text file
+#             # with open('targets.txt', 'a') as file:
+#             #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
+#
+#         lobj += BCEobj(pi[..., 4], tobj) * balance[i]  # obj loss
+#
+#     s = 3 / np  # output count scaling
+#     lbox *= 0.05 * s
+#     lobj *= 1.0 * s * (1.4 if np == 4 else 1.)
+#     lcls *= 0.5 * s
+#
+#     return lcls, lbox, lobj
+#
+#
+# def build_targets(p, targets):
+#     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
+#
+#     na, nt = 3, targets.shape[0]  # number of anchors, targets
+#     tcls, tbox, indices, anch = [], [], [], []
+#     gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
+#     off = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]], device=targets.device).float()  # overlap offsets
+#     at = torch.arange(na).view(na, 1).repeat(1, nt)  # anchor tensor, same as .repeat_interleave(nt)
+#
+#     g = 0.5  # offset
+#     style = 'rect4'
+#
+#     det_anchors = torch.tensor([[[1.50000, 2.00000],
+#                                  [2.37500, 4.50000],
+#                                  [5.00000, 3.50000]],
+#
+#                                 [[2.25000, 4.68750],
+#                                  [4.75000, 3.43750],
+#                                  [4.50000, 9.12500]],
+#
+#                                 [[4.43750, 3.43750],
+#                                  [6.00000, 7.59375],
+#                                  [14.34375, 12.53125]]], device=targets.device)
+#
+#     for i in range(3):
+#         anchors = det_anchors[i]
+#         gain[2:] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
+#
+#         # Match targets to anchors
+#         a, t, offsets = [], targets * gain, 0
+#         if nt:
+#             r = t[None, :, 4:6] / anchors[:, None]  # wh ratio
+#             j = torch.max(r, 1. / r).max(2)[0] < 4.0  # compare
+#             # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n) = wh_iou(anchors(3,2), gwh(n,2))
+#             a, t = at[j], t.repeat(na, 1, 1)[j]  # filter
+#
+#             # overlaps
+#             gxy = t[:, 2:4]  # grid xy
+#             z = torch.zeros_like(gxy)
+#             if style == 'rect2':
+#                 j, k = ((gxy % 1. < g) & (gxy > 1.)).T
+#                 a, t = torch.cat((a, a[j], a[k]), 0), torch.cat((t, t[j], t[k]), 0)
+#                 offsets = torch.cat((z, z[j] + off[0], z[k] + off[1]), 0) * g
+#             elif style == 'rect4':
+#                 j, k = ((gxy % 1. < g) & (gxy > 1.)).T
+#                 l, m = ((gxy % 1. > (1 - g)) & (gxy < (gain[[2, 3]] - 1.))).T
+#                 a, t = torch.cat((a, a[j], a[k], a[l], a[m]), 0), torch.cat((t, t[j], t[k], t[l], t[m]), 0)
+#                 offsets = torch.cat((z, z[j] + off[0], z[k] + off[1], z[l] + off[2], z[m] + off[3]), 0) * g
+#
+#         # Define
+#         b, c = t[:, :2].long().T  # image, class
+#         gxy = t[:, 2:4]  # grid xy
+#         gwh = t[:, 4:6]  # grid wh
+#         gij = (gxy - offsets).long()
+#         gi, gj = gij.T  # grid xy indices
+#
+#         # Append
+#         indices.append((b, a, gj, gi))  # image, anchor, grid indices
+#         tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
+#         anch.append(anchors[a])  # anchors
+#         tcls.append(c)  # class
+#
+#     return tcls, tbox, indices, anch
+#
+#
+# def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
+#     # Returns the IoU of box1 to box2. box1 is 4, box2 is nx4
+#     box2 = box2.t()
+#
+#     # Get the coordinates of bounding boxes
+#     if x1y1x2y2:  # x1, y1, x2, y2 = box1
+#         b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
+#         b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
+#     else:  # transform from xywh to xyxy
+#         b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
+#         b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
+#         b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
+#         b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
+#
+#     # Intersection area
+#     inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
+#             (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
+#
+#     # Union Area
+#     w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1
+#     w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1
+#     union = (w1 * h1 + 1e-16) + w2 * h2 - inter
+#
+#     iou = inter / union  # iou
+#     if GIoU or DIoU or CIoU:
+#         cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex (smallest enclosing box) width
+#         ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
+#         if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
+#             c_area = cw * ch + 1e-16  # convex area
+#             return iou - (c_area - union) / c_area  # GIoU
+#         if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+#             # convex diagonal squared
+#             c2 = cw ** 2 + ch ** 2 + 1e-16
+#             # centerpoint distance squared
+#             rho2 = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) ** 2 / 4 + ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) ** 2 / 4
+#             if DIoU:
+#                 return iou - rho2 / c2  # DIoU
+#             elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
+#                 v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
+#                 with torch.no_grad():
+#                     alpha = v / (1 - iou + v)
+#                 return iou - (rho2 / c2 + v * alpha)  # CIoU
+#
+#     return iou

@@ -1,11 +1,10 @@
 _base_ = ['../_base_/default_runtime.py', '../_base_/datasets/coco.py']
 
 test_cfg = dict(
-    nms_pre=1000,
     min_bbox_size=0,
-    score_thr=0.05,
-    conf_thr=0.005,
-    nms=dict(type='nms', iou_threshold=0.45),
+    score_thr=0.001,
+    conf_thr=0.001,
+    nms=dict(type='nms', iou_threshold=0.6),
     max_per_img=100)
 
 # optimizer
@@ -13,10 +12,8 @@ optimizer = dict(type='SGD', lr=0.01, momentum=0.93, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0))
 optimizer_config = dict(
-    type='Fp16GradAccumulateOptimizerHook',
-    distributed=False,
+    type='AMPGradAccumulateOptimizerHook',
     accumulation=2,
-    loss_scale=1024.,
     grad_clip=dict(max_norm=35, norm_type=2),
 )
 
@@ -31,7 +28,7 @@ lr_config = dict(
     warmup_ratio=0.001)
 # runtime settings
 log_config = dict(
-    interval=50,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
@@ -47,8 +44,8 @@ custom_hooks = [
     dict(
         type='YOLOV4EMAHook',
         momentum=0.9999,
-        interval=1,
-        warm_up=2000,
+        interval=2,
+        warm_up=4000,
         resume_from=None,
         priority='HIGH'
     )

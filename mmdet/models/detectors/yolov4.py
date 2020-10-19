@@ -2,10 +2,10 @@
 
 from ..builder import DETECTORS
 from .single_stage import SingleStageDetector
-from mmcv.runner import Hook, Fp16OptimizerHook, HOOKS
+from mmcv.runner import Hook, Fp16OptimizerHook, HOOKS, OptimizerHook
 from mmcv.parallel import is_module_wrapper
-from mmcv.runner.fp16_utils import allreduce_grads
 import math
+from torch.cuda.amp import GradScaler, autocast
 
 
 @DETECTORS.register_module()
@@ -17,9 +17,60 @@ class YOLOV4(SingleStageDetector):
                  bbox_head,
                  train_cfg=None,
                  test_cfg=None,
-                 pretrained=None):
+                 pretrained=None,
+                 use_amp=True):
         super(YOLOV4, self).__init__(backbone, neck, bbox_head, train_cfg,
                                      test_cfg, pretrained)
+        self.use_amp = use_amp
+
+    def forward_train(self, *wargs, **kwargs):
+        if self.use_amp:
+            with autocast():
+                return super(YOLOV4, self).forward_train(*wargs, **kwargs)
+        else:
+            return super(YOLOV4, self).forward_train(*wargs, **kwargs)
+
+    def simple_test(self, *wargs, **kwargs):
+        if self.use_amp:
+            with autocast():
+                return super(YOLOV4, self).simple_test(*wargs, **kwargs)
+        else:
+            return super(YOLOV4, self).simple_test(*wargs, **kwargs)
+
+
+@HOOKS.register_module()
+class AMPGradAccumulateOptimizerHook(OptimizerHook):
+    def __init__(self, *wargs, **kwargs):
+        self.accumulation = kwargs.pop('accumulation', 1)
+        self.scaler = GradScaler()
+        super(AMPGradAccumulateOptimizerHook, self).__init__(*wargs, **kwargs)
+        self.grad_clip_base = self.grad_clip['max_norm']
+
+    def before_run(self, runner):
+        assert hasattr(runner.model.module, 'use_amp') and runner.model.module.use_amp, 'model should support AMP when using this optimizer hook!'
+
+    def before_train_iter(self, runner):
+        if runner.iter % self.accumulation == 0:
+            runner.model.zero_grad()
+            runner.optimizer.zero_grad()
+
+    def after_train_iter(self, runner):
+        scaled_loss = self.scaler.scale(runner.outputs['loss'])
+        scaled_loss.backward()
+
+        if (runner.iter + 1) % self.accumulation == 0:
+            if self.grad_clip is not None:
+                scale = self.scaler.get_scale()
+                self.grad_clip['max_norm'] = self.grad_clip_base * scale
+                grad_norm = self.clip_grads(runner.model.parameters())
+                if grad_norm is not None:
+                    # Add grad norm to the logger
+                    runner.log_buffer.update({'grad_norm': float(grad_norm) / float(scale), 
+                                              'grad_scale': float(scale)},
+                                            runner.outputs['num_samples'])
+            self.scaler.step(runner.optimizer)
+            self.scaler.update()
+
 
 
 @HOOKS.register_module()
@@ -70,7 +121,7 @@ class Fp16GradAccumulateOptimizerHook(Fp16OptimizerHook):
 @HOOKS.register_module()
 class LrBiasPreHeatHook(Hook):
     def __init__(self,
-                 preheat_iters=1000,
+                 preheat_iters=2000,
                  preheat_ratio=10.):
 
         self.preheat_iters = preheat_iters
@@ -123,14 +174,14 @@ class YOLOV4EMAHook(Hook):
 
     def __init__(self,
                  momentum=0.9999,
-                 interval=1,
+                 interval=2,
                  warm_up=2000,
                  resume_from=None):
         assert isinstance(interval, int) and interval > 0
         self.warm_up = warm_up
         self.interval = interval
         assert momentum > 0 and momentum < 1
-        self.momentum = momentum ** interval
+        self.momentum = momentum
         self.checkpoint = resume_from
 
     def before_run(self, runner):
@@ -154,18 +205,14 @@ class YOLOV4EMAHook(Hook):
 
     def after_train_iter(self, runner):
         """Update ema parameter every self.interval iterations."""
-        curr_step = runner.iter
-        # We warm up the momentum considering the instability at beginning
-        # momentum = min(self.momentum,
-        #                (1 + curr_step) / (self.warm_up + curr_step))
-
-        momentum = self.momentum * (1 - math.exp(-curr_step / self.warm_up))
-        if curr_step % self.interval != 0:
+        momentum = self.momentum * (1 - math.exp(-runner.iter / self.warm_up))
+        if (runner.iter + 1) % self.interval != 0:
             return
         for name, parameter in self.model_parameters.items():
-            buffer_name = self.param_ema_buffer[name]
-            buffer_parameter = self.model_buffers[buffer_name]
-            buffer_parameter.mul_(momentum).add_(1 - momentum, parameter.data)
+            if parameter.dtype.is_floating_point:
+                buffer_name = self.param_ema_buffer[name]
+                buffer_parameter = self.model_buffers[buffer_name]
+                buffer_parameter.mul_(momentum).add_(1 - momentum, parameter.data)
 
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the

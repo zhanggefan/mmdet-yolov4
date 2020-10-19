@@ -9,13 +9,13 @@ class YOLOV4AnchorGenerator(YOLOAnchorGenerator):
     """Anchor generator for YOLOV4.
     """
 
-    def responsible_indices(self, featmap_sizes, gt_bboxes, neighbor=3, shape_match_thres=4., device='cuda'):
+    def responsible_indices(self, featmap_sizes, gt_bboxes_list, neighbor=3, shape_match_thres=4., device='cuda'):
         """Generate responsible anchor flags of grid cells in multiple scales.
 
         Args:
             featmap_sizes (list(tuple)): List of feature map sizes in multiple
                 feature levels.
-            gt_bboxes (Tensor): Ground truth boxes, shape (n, 4).
+            gt_bboxes_list (list(Tensor)): List of Ground truth boxes, each with shape (n, 4).
             neighbor (int): assign gt to neighbor grid cell. Possible values:
                 0: assign prediction responsibility to the only one grid cell where the center of the gt bbox locates
                 2: additionally assign prediction responsibility to 2 nearest neighbor grid cells, like what yolo v5 do
@@ -28,20 +28,29 @@ class YOLOV4AnchorGenerator(YOLOAnchorGenerator):
                 Defaults to 'cuda'.
 
         Return:
-            list(tuple(torch.Tensor)): responsible indices of corresponding anchors & gt-bboxes of multiple levels
+            list(tuple(torch.Tensor)): responsible indices
         """
         # Build targets for compute_loss(), input targets(x,y,w,h)
-        num_gt = gt_bboxes.shape[0]  # number of anchors, targets
+        img_id = []
+
+        for ind, gt_bboxes in enumerate(gt_bboxes_list):
+            num_gt = gt_bboxes.shape[0]
+            img_id.append(gt_bboxes.new_full((num_gt,), ind, dtype=torch.long))
+
+        gt_bboxes = torch.cat(gt_bboxes_list, dim=0)
+        img_id = torch.cat(img_id, dim=0)
+
         indices = []
 
-        if num_gt == 0:
+        if gt_bboxes.shape[0] == 0:
             for _ in range(self.num_levels):
                 indices.append((torch.tensor([], device=device, dtype=torch.long),
+                                torch.tensor([], device=device, dtype=torch.long),
                                 torch.tensor([], device=device, dtype=torch.long)))
             return indices
 
-        gt_xy = (0.5 * (gt_bboxes[:, 2:] + gt_bboxes[:, :2])).to(device)
-        gt_wh = (gt_bboxes[:, 2:] - gt_bboxes[:, :2]).to(device)
+        gt_xy = (0.5 * (gt_bboxes[:, 2:4] + gt_bboxes[:, :2])).to(device)
+        gt_wh = (gt_bboxes[:, 2:4] - gt_bboxes[:, :2]).to(device)
 
         neighbor_offset = gt_xy.new_tensor([[0, 0],  # current grid
                                             [-1, 0],  # left neighbor grid
@@ -73,7 +82,7 @@ class YOLOV4AnchorGenerator(YOLOAnchorGenerator):
             strides = gt_xy.new_tensor([strides])
 
             xy_grid = gt_xy[gt_ind] / strides  # grid xy
-            xy_grid_inv = feat_size - xy_grid  # inverse
+            xy_grid_inv = feat_size - xy_grid  # inverse just used for fast calculation of neighbor cell validity
             if neighbor == 0:
                 pred_x, pred_y = xy_grid.long().T
                 anchor_ind = (pred_y * feat_w + pred_x) * num_base_anchors + base_anchor_ind
@@ -120,6 +129,6 @@ class YOLOV4AnchorGenerator(YOLOAnchorGenerator):
                 pred_x, pred_y = xy_grid_all.long().T
                 anchor_ind = (pred_y * feat_w + pred_x) * num_base_anchors + base_anchor_ind
 
-            indices.append((anchor_ind, gt_ind))
+            indices.append((img_id[gt_ind], anchor_ind, gt_ind))
 
         return indices
