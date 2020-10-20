@@ -54,7 +54,7 @@ cfg = Config.fromfile('configs/yolov4/yolov4_coco.py')
 # cfg.data.workers_per_gpu = 0
 cfg.gpu_ids = range(1)
 cfg.seed = 0
-cfg.work_dir = 'work_dirs/yolov4/yolov4_20201018'
+cfg.work_dir = 'work_dirs/yolov4/yolov4_20201020'
 
 model = YOLOV4(
     backbone = dict(type='DarknetCSP', scale='s5p', out_indices=[3, 4, 5]),

@@ -28,7 +28,7 @@ lr_config = dict(
     warmup_ratio=0.001)
 # runtime settings
 log_config = dict(
-    interval=10,
+    interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
@@ -52,5 +52,5 @@ custom_hooks = [
 ]
 
 total_epochs = 300
-evaluation = dict(interval=1, metric=['bbox'])
+evaluation = dict(interval=5, metric=['bbox'])
 # fp16 = dict(loss_scale=512.)
