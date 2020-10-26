@@ -6,6 +6,9 @@ from mmcv.runner import Hook, Fp16OptimizerHook, HOOKS, OptimizerHook
 from mmcv.parallel import is_module_wrapper
 import math
 from torch.cuda.amp import GradScaler, autocast
+from ...datasets import PIPELINES
+import mmcv
+import numpy as np
 
 
 @DETECTORS.register_module()
@@ -47,7 +50,8 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
         self.grad_clip_base = self.grad_clip['max_norm']
 
     def before_run(self, runner):
-        assert hasattr(runner.model.module, 'use_amp') and runner.model.module.use_amp, 'model should support AMP when using this optimizer hook!'
+        assert hasattr(runner.model.module,
+                       'use_amp') and runner.model.module.use_amp, 'model should support AMP when using this optimizer hook!'
 
     def before_train_iter(self, runner):
         if runner.iter % self.accumulation == 0:
@@ -65,12 +69,11 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
                 grad_norm = self.clip_grads(runner.model.parameters())
                 if grad_norm is not None:
                     # Add grad norm to the logger
-                    runner.log_buffer.update({'grad_norm': float(grad_norm) / float(scale), 
+                    runner.log_buffer.update({'grad_norm': float(grad_norm) / float(scale),
                                               'grad_scale': float(scale)},
-                                            runner.outputs['num_samples'])
+                                             runner.outputs['num_samples'])
             self.scaler.step(runner.optimizer)
             self.scaler.update()
-
 
 
 @HOOKS.register_module()

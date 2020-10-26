@@ -2,13 +2,14 @@ _base_ = ['../_base_/default_runtime.py', '../_base_/datasets/coco.py']
 
 test_cfg = dict(
     min_bbox_size=0,
+    nms_pre=1000,
     score_thr=0.001,
     conf_thr=0.001,
     nms=dict(type='nms', iou_threshold=0.6),
     max_per_img=100)
 
 # optimizer
-optimizer = dict(type='SGD', lr=0.01, momentum=0.93, weight_decay=0.0005,
+optimizer = dict(type='SGD', lr=0.001, momentum=0.93, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0))
 optimizer_config = dict(
@@ -35,12 +36,12 @@ log_config = dict(
     ])
 
 custom_hooks = [
-    dict(
-        type='LrBiasPreHeatHook',
-        preheat_iters=2000,
-        preheat_ratio=10.,
-        priority='NORMAL'
-    ),
+    # dict(
+    #     type='LrBiasPreHeatHook',
+    #     preheat_iters=2000,
+    #     preheat_ratio=10.,
+    #     priority='NORMAL'
+    # ),
     dict(
         type='YOLOV4EMAHook',
         momentum=0.9999,
@@ -51,6 +52,6 @@ custom_hooks = [
     )
 ]
 
-total_epochs = 300
-evaluation = dict(interval=5, metric=['bbox'])
+total_epochs = 400
+evaluation = dict(interval=1, metric=['bbox'])
 # fp16 = dict(loss_scale=512.)

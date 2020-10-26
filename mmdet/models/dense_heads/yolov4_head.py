@@ -59,7 +59,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                  featmap_strides=[8, 16, 32],
                  one_hot_smoother=0.,
                  conv_cfg=None,
-                 norm_cfg=dict(type='BN', requires_grad=True),
+                 norm_cfg=dict(type='BN', requires_grad=True, eps=0.001, momentum=0.03),
                  act_cfg=dict(type='Mish'),
                  loss_cls=dict(
                      type='CrossEntropyLoss',
@@ -198,20 +198,55 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 corresponding box.
         """
         with autocast(enabled=False):
-            result_list = []
             num_levels = len(pred_maps)
+            num_image = len(img_metas)
+
+            featmap_sizes = [pred_maps[i].shape[-2:] for i in range(num_levels)]
+            mlvl_anchors = self.anchor_generator.grid_anchors(
+                featmap_sizes, pred_maps[0].device)
+
+            mlvl_bbox_pred = []
+            mlvl_conf_pred = []
+            mlvl_score_pred = []
+
+            for lvl in range(num_levels):
+                lvl_pred_maps = pred_maps[lvl].permute(0, 2, 3, 1).reshape(
+                    (num_image, -1, self.num_attrib))
+                # activation
+                lvl_pred_maps = lvl_pred_maps.sigmoid()
+                # class score
+                mlvl_score_pred.append(lvl_pred_maps[:, :, 5:])
+                # conf score
+                mlvl_conf_pred.append(lvl_pred_maps[:, :, 4])
+                # bbox transform
+                lvl_pred_maps[:, :, :2] = lvl_pred_maps[:, :, :2] * 2. - 0.5
+                lvl_pred_maps[:, :, 2:4] = (lvl_pred_maps[:, :, 2:4] * 2) ** 2
+                lvl_bbox_pred = lvl_pred_maps[:, :, :4].reshape(-1, 4)
+                lvl_anchors = mlvl_anchors[lvl][None, ...].repeat((num_image, 1, 1))
+
+                lvl_bbox_pred = self.bbox_coder.decode(bboxes=lvl_anchors.reshape(-1, 4),
+                                                       pred_bboxes=lvl_bbox_pred.reshape(-1, 4),
+                                                       stride=self.featmap_strides[lvl])
+                lvl_bbox_pred = lvl_bbox_pred.reshape((num_image, -1, 4))
+                mlvl_bbox_pred.append(lvl_bbox_pred)
+
+            mimg_score_pred = [score for score in torch.cat(mlvl_score_pred, dim=1)]
+            mimg_conf_pred = [conf for conf in torch.cat(mlvl_conf_pred, dim=1)]
+            mimg_bbox_pred = [bbox for bbox in torch.cat(mlvl_bbox_pred, dim=1)]
+
+            result_list = []
+
             for img_id in range(len(img_metas)):
-                pred_maps_list = [
-                    pred_maps[i][img_id].detach() for i in range(num_levels)
-                ]
                 scale_factor = img_metas[img_id]['scale_factor']
-                proposals = self._get_bboxes_single(pred_maps_list, scale_factor,
-                                                    cfg, rescale, with_nms)
+                proposals = self._get_bboxes_single(mimg_score_pred[img_id], mimg_conf_pred[img_id],
+                                                    mimg_bbox_pred[img_id], scale_factor, cfg, rescale, with_nms)
                 result_list.append(proposals)
         return result_list
 
     def _get_bboxes_single(self,
-                           pred_maps_list,
+                           cls_pred,
+                           conf_pred,
+                           bbox_pred,
                            scale_factor,
                            cfg,
                            rescale=False,
@@ -219,8 +254,9 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         """Transform outputs for a single batch item into bbox predictions.
 
         Args:
-            pred_maps_list (list[Tensor]): Prediction maps for different scales
-                of each single image in the batch.
+            cls_pred (Tensor): Score of each predicted bbox of a single image.
+            conf_pred (Tensor): Confidence of each predicted bbox of a single image.
+            bbox_pred (Tensor): Predicted bbox of a single image.
             scale_factor (ndarray): Scale factor of the image arrange as
                 (w_scale, h_scale, w_scale, h_scale).
             cfg (mmcv.Config | None): Test / postprocessing configuration,
@@ -240,83 +276,46 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                     predicted class label of the corresponding box.
         """
         cfg = self.test_cfg if cfg is None else cfg
-        assert len(pred_maps_list) == self.num_levels
-        multi_lvl_bboxes = []
-        multi_lvl_cls_scores = []
-        multi_lvl_conf_scores = []
-        num_levels = len(pred_maps_list)
-        featmap_sizes = [
-            pred_maps_list[i].shape[-2:] for i in range(num_levels)
-        ]
-        multi_lvl_anchors = self.anchor_generator.grid_anchors(
-            featmap_sizes, pred_maps_list[0][0].device)
-        for i in range(self.num_levels):
-            # get some key info for current scale
-            pred_map = pred_maps_list[i]
-            stride = self.featmap_strides[i]
 
-            # (h, w, num_anchors*num_attrib) -> (h*w*num_anchors, num_attrib)
-            pred_map = pred_map.permute(1, 2, 0).reshape(-1, self.num_attrib)
+        # Filtering out all predictions with conf < conf_thr
+        conf_thr = cfg.get('conf_thr', -1)
+        conf_inds = conf_pred.ge(conf_thr)
+        bbox_pred = bbox_pred[conf_inds, :]
+        cls_pred = cls_pred[conf_inds, :]
+        conf_pred = conf_pred[conf_inds]
 
-            pred_map = pred_map.sigmoid()
-            pred_map[..., :2] = pred_map[..., :2] * 2. - 0.5
-            pred_map[..., 2:4] = (pred_map[..., 2:4] * 2) ** 2
-            bbox_pred = self.bbox_coder.decode(multi_lvl_anchors[i],
-                                               pred_map[..., :4], stride)
-            # conf and cls
-            conf_pred = pred_map[..., 4].view(-1)
-            cls_pred = pred_map[..., 5:].view(-1, self.num_classes)  # Cls pred one-hot.
+        # Get top-k prediction
+        nms_pre = cfg.get('nms_pre', -1)
+        if 0 < nms_pre < conf_pred.size(0):
+            _, topk_inds = conf_pred.topk(nms_pre)
+            bbox_pred = bbox_pred[topk_inds, :]
+            cls_pred = cls_pred[topk_inds, :]
+            conf_pred = conf_pred[topk_inds]
 
-            # Filtering out all predictions with conf < conf_thr
-            conf_thr = cfg.get('conf_thr', -1)
-            conf_inds = conf_pred.ge(conf_thr).nonzero().flatten()
-            bbox_pred = bbox_pred[conf_inds, :]
-            cls_pred = cls_pred[conf_inds, :]
-            conf_pred = conf_pred[conf_inds]
-
-            # Get top-k prediction
-            nms_pre = cfg.get('nms_pre', -1)
-            if 0 < nms_pre < conf_pred.size(0):
-                _, topk_inds = conf_pred.topk(nms_pre)
-                bbox_pred = bbox_pred[topk_inds, :]
-                cls_pred = cls_pred[topk_inds, :]
-                conf_pred = conf_pred[topk_inds]
-
-            # Save the result of current scale
-            multi_lvl_bboxes.append(bbox_pred)
-            multi_lvl_cls_scores.append(cls_pred)
-            multi_lvl_conf_scores.append(conf_pred)
-
-        # Merge the results of different scales together
-        multi_lvl_bboxes = torch.cat(multi_lvl_bboxes)
-        multi_lvl_cls_scores = torch.cat(multi_lvl_cls_scores)
-        multi_lvl_conf_scores = torch.cat(multi_lvl_conf_scores)
-
-        if with_nms and (multi_lvl_conf_scores.size(0) == 0):
+        if with_nms and (cls_pred.size(0) == 0):
             return torch.zeros((0, 5)), torch.zeros((0,))
 
         if rescale:
-            multi_lvl_bboxes /= multi_lvl_bboxes.new_tensor(scale_factor)
-
-        # In mmdet 2.x, the class_id for background is num_classes.
-        # i.e., the last column.
-        padding = multi_lvl_cls_scores.new_zeros(multi_lvl_cls_scores.shape[0],
-                                                 1)
-        multi_lvl_cls_scores = torch.cat([multi_lvl_cls_scores, padding],
-                                         dim=1)
+            bbox_pred /= bbox_pred.new_tensor(scale_factor)
 
         if with_nms:
+            # In mmdet 2.x, the class_id for background is num_classes.
+            # i.e., the last column.
+            padding = cls_pred.new_zeros(cls_pred.shape[0], 1)
+            cls_pred = torch.cat([cls_pred, padding], dim=1)
+
             det_bboxes, det_labels = multiclass_nms(
-                multi_lvl_bboxes,
-                multi_lvl_cls_scores,
+                bbox_pred,
+                cls_pred,
                 cfg.score_thr,
                 cfg.nms,
                 cfg.max_per_img,
-                score_factors=multi_lvl_conf_scores)
+                score_factors=conf_pred)
             return det_bboxes, det_labels
         else:
-            return (multi_lvl_bboxes, multi_lvl_cls_scores,
-                    multi_lvl_conf_scores)
+            cls_pred = cls_pred * conf_pred[:, None]
+            class_score, class_id = cls_pred.max(dim=-1)
+            return torch.cat((bbox_pred, class_score[:, None]), dim=-1), class_id
 
     @force_fp32(apply_to=('pred_maps',))
     def loss(self,
@@ -524,15 +523,17 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         """
         return self.aug_test_bboxes(feats, img_metas, rescale=rescale)
 
-#
+
 # # following code are moved here for comparison only
-#
-#
+
+
 # def compute_loss(p, img_metas, gt_bboxes_list, gt_labels_list):  # predictions, targets, model
-#
+
 #     tgt = []
 #     for i in range(len(gt_bboxes_list)):
-#         h, w = img_metas[i]['pad_shape'][:2]
+#         h, w = p[0].shape[2:]
+#         h*=8
+#         w*=8
 #         num_gt = gt_bboxes_list[i].shape[0]
 #         gt_bboxes_list[i] /= torch.tensor([w, h, w, h]).cuda()
 #         gt_xy = (gt_bboxes_list[i][:, :2] + gt_bboxes_list[i][:, 2:]) / 2
@@ -540,21 +541,21 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #         img_id = gt_wh.new_full((num_gt, 1), i)
 #         tgt.append(torch.cat([img_id, gt_labels_list[i][:, None], gt_xy, gt_wh], dim=-1))
 #     targets = torch.cat(tgt, dim=0)
-#
+
 #     device = targets.device
 #     ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
 #     lcls, lbox, lobj = ft([0]).to(device), ft([0]).to(device), ft([0]).to(device)
 #     tcls, tbox, indices, anchors = build_targets(p, targets)  # targets
-#
+
 #     red = 'mean'  # Loss reduction (sum or mean)
-#
+
 #     # Define criteria
 #     BCEcls = nn.BCEWithLogitsLoss(pos_weight=ft([1.0]), reduction=red).to(device)
 #     BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([1.0]), reduction=red).to(device)
-#
+
 #     # class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
 #     cp, cn = 1.0, 0.0
-#
+
 #     # per output
 #     nt = 0  # number of targets
 #     np = len(p)  # number of outputs
@@ -564,68 +565,68 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #         pi = pi.reshape(bs, 3, -1, h, w).permute(0, 1, 3, 4, 2).contiguous()
 #         b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
 #         tobj = torch.zeros_like(pi[..., 0]).to(device)  # target obj
-#
+
 #         nb = b.shape[0]  # number of targets
 #         if nb:
 #             nt += nb  # cumulative targets
 #             ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
-#
+
 #             # GIoU
 #             pxy = ps[:, :2].sigmoid() * 2. - 0.5
 #             pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
 #             pbox = torch.cat((pxy, pwh), 1).to(device)  # predicted box
 #             giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou(prediction, target)
 #             lbox += (1.0 - giou).mean()  # giou loss
-#
+
 #             # Obj
 #             tobj[b, a, gj, gi] = giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
-#
+
 #             t = torch.full_like(ps[:, 5:], cn).to(device)  # targets
 #             t[range(nb), tcls[i]] = cp
 #             lcls += BCEcls(ps[:, 5:], t)  # BCE
-#
+
 #             # Append targets to text file
 #             # with open('targets.txt', 'a') as file:
 #             #     [file.write('%11.5g ' * 4 % tuple(x) + '\n') for x in torch.cat((txy[i], twh[i]), 1)]
-#
+
 #         lobj += BCEobj(pi[..., 4], tobj) * balance[i]  # obj loss
-#
+
 #     s = 3 / np  # output count scaling
 #     lbox *= 0.05 * s
 #     lobj *= 1.0 * s * (1.4 if np == 4 else 1.)
 #     lcls *= 0.5 * s
-#
+
 #     return lcls, lbox, lobj
-#
-#
+
+
 # def build_targets(p, targets):
 #     # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-#
+
 #     na, nt = 3, targets.shape[0]  # number of anchors, targets
 #     tcls, tbox, indices, anch = [], [], [], []
 #     gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
 #     off = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]], device=targets.device).float()  # overlap offsets
 #     at = torch.arange(na).view(na, 1).repeat(1, nt)  # anchor tensor, same as .repeat_interleave(nt)
-#
+
 #     g = 0.5  # offset
 #     style = 'rect4'
-#
+
 #     det_anchors = torch.tensor([[[1.50000, 2.00000],
 #                                  [2.37500, 4.50000],
 #                                  [5.00000, 3.50000]],
-#
+
 #                                 [[2.25000, 4.68750],
 #                                  [4.75000, 3.43750],
 #                                  [4.50000, 9.12500]],
-#
+
 #                                 [[4.43750, 3.43750],
 #                                  [6.00000, 7.59375],
 #                                  [14.34375, 12.53125]]], device=targets.device)
-#
+
 #     for i in range(3):
 #         anchors = det_anchors[i]
 #         gain[2:] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
-#
+
 #         # Match targets to anchors
 #         a, t, offsets = [], targets * gain, 0
 #         if nt:
@@ -633,7 +634,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #             j = torch.max(r, 1. / r).max(2)[0] < 4.0  # compare
 #             # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n) = wh_iou(anchors(3,2), gwh(n,2))
 #             a, t = at[j], t.repeat(na, 1, 1)[j]  # filter
-#
+
 #             # overlaps
 #             gxy = t[:, 2:4]  # grid xy
 #             z = torch.zeros_like(gxy)
@@ -646,27 +647,27 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #                 l, m = ((gxy % 1. > (1 - g)) & (gxy < (gain[[2, 3]] - 1.))).T
 #                 a, t = torch.cat((a, a[j], a[k], a[l], a[m]), 0), torch.cat((t, t[j], t[k], t[l], t[m]), 0)
 #                 offsets = torch.cat((z, z[j] + off[0], z[k] + off[1], z[l] + off[2], z[m] + off[3]), 0) * g
-#
+
 #         # Define
 #         b, c = t[:, :2].long().T  # image, class
 #         gxy = t[:, 2:4]  # grid xy
 #         gwh = t[:, 4:6]  # grid wh
 #         gij = (gxy - offsets).long()
 #         gi, gj = gij.T  # grid xy indices
-#
+
 #         # Append
 #         indices.append((b, a, gj, gi))  # image, anchor, grid indices
 #         tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
 #         anch.append(anchors[a])  # anchors
 #         tcls.append(c)  # class
-#
+
 #     return tcls, tbox, indices, anch
-#
-#
+
+
 # def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
 #     # Returns the IoU of box1 to box2. box1 is 4, box2 is nx4
 #     box2 = box2.t()
-#
+
 #     # Get the coordinates of bounding boxes
 #     if x1y1x2y2:  # x1, y1, x2, y2 = box1
 #         b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
@@ -676,16 +677,16 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #         b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
 #         b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
 #         b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
-#
+
 #     # Intersection area
 #     inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
 #             (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
-#
+
 #     # Union Area
 #     w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1
 #     w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1
 #     union = (w1 * h1 + 1e-16) + w2 * h2 - inter
-#
+
 #     iou = inter / union  # iou
 #     if GIoU or DIoU or CIoU:
 #         cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex (smallest enclosing box) width
@@ -705,5 +706,5 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 #                 with torch.no_grad():
 #                     alpha = v / (1 - iou + v)
 #                 return iou - (rho2 / c2 + v * alpha)  # CIoU
-#
+
 #     return iou
