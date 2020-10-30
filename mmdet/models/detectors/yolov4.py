@@ -7,8 +7,11 @@ from mmcv.parallel import is_module_wrapper
 import math
 from torch.cuda.amp import GradScaler, autocast
 from ...datasets import PIPELINES
+from ...datasets.pipelines.compose import Compose
 import mmcv
 import numpy as np
+import os.path as osp
+import random
 
 
 @DETECTORS.register_module()
@@ -47,7 +50,8 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
         self.accumulation = kwargs.pop('accumulation', 1)
         self.scaler = GradScaler()
         super(AMPGradAccumulateOptimizerHook, self).__init__(*wargs, **kwargs)
-        self.grad_clip_base = self.grad_clip['max_norm']
+        if self.grad_clip is not None:
+            self.grad_clip_base = self.grad_clip['max_norm']
 
     def before_run(self, runner):
         assert hasattr(runner.model.module,
@@ -208,10 +212,10 @@ class YOLOV4EMAHook(Hook):
 
     def after_train_iter(self, runner):
         """Update ema parameter every self.interval iterations."""
-        momentum = self.momentum * (1 - math.exp(-runner.iter / self.warm_up))
         if (runner.iter + 1) % self.interval != 0:
             return
         for name, parameter in self.model_parameters.items():
+            momentum = self.momentum * (1 - math.exp(-runner.iter / self.warm_up))
             if parameter.dtype.is_floating_point:
                 buffer_name = self.param_ema_buffer[name]
                 buffer_parameter = self.model_buffers[buffer_name]
@@ -234,3 +238,177 @@ class YOLOV4EMAHook(Hook):
             ema_buffer = self.model_buffers[self.param_ema_buffer[name]]
             value.data.copy_(ema_buffer.data)
             ema_buffer.data.copy_(temp)
+
+
+@PIPELINES.register_module()
+class RoundPad(object):
+    """Pad the image & mask.
+
+    There are two padding modes: (1) pad to a fixed size and (2) pad to the
+    minimum size that is divisible by some number.
+    Added keys are "pad_shape", "pad_fixed_size", "pad_size_divisor",
+
+    Args:
+        size (tuple, optional): Fixed padding size.
+        size_divisor (int, optional): The divisor of padded size.
+        pad_val (float, optional): Padding value, 0 by default.
+    """
+
+    def __init__(self, size=None, size_divisor=None, pad_val=0):
+        self.size = size
+        self.size_divisor = size_divisor
+        self.pad_val = pad_val
+        # only one of size and size_divisor should be valid
+        assert size is not None or size_divisor is not None
+        assert size is None or size_divisor is None
+
+    def __call__(self, results):
+        """Call function to pad images, masks, semantic segmentation maps.
+
+        Args:
+            results (dict): Result dict from loading pipeline.
+
+        Returns:
+            dict: Updated result dict.
+        """
+        """Pad images according to ``self.size``."""
+        for key in results.get('img_fields', ['img']):
+            img = results[key]
+            ori_h, ori_w = img.shape[:2]
+            if self.size is not None:
+                pad_h, pad_w = self.size
+            elif self.size_divisor is not None:
+                divisor = self.size_divisor
+                pad_h = int(np.ceil(ori_h / divisor)) * divisor
+                pad_w = int(np.ceil(ori_w / divisor)) * divisor
+
+            pad_top = (pad_h - ori_h) // 2
+            pad_bottom = pad_h - ori_h - pad_top
+            pad_left = (pad_w - ori_w) // 2
+            par_right = pad_w - ori_w - pad_left
+            padded_img = mmcv.impad(
+                results[key], padding=(pad_left, pad_top, par_right, pad_bottom), pad_val=self.pad_val)
+            results[key] = padded_img
+
+        results['pad_shape'] = padded_img.shape
+        results['pad_fixed_size'] = self.size
+        results['pad_size_divisor'] = self.size_divisor
+
+        # crop bboxes accordingly and clip to the image boundary
+        for key in results.get('bbox_fields', []):
+            # e.g. gt_bboxes and gt_bboxes_ignore
+            bbox_offset = np.array([pad_left, pad_top, pad_left, pad_top],
+                                   dtype=np.float32)
+            results[key] += bbox_offset
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(size={self.size}, '
+        repr_str += f'size_divisor={self.size_divisor}, '
+        repr_str += f'pad_val={self.pad_val})'
+        return repr_str
+
+
+@PIPELINES.register_module()
+class MosaicPipeline(object):
+    """Load an image from file.
+
+    Required keys are "img_prefix" and "img_info" (a dict that must contain the
+    key "filename"). Added or updated keys are "filename", "img", "img_shape",
+    "ori_shape" (same as `img_shape`), "pad_shape" (same as `img_shape`),
+    "scale_factor" (1.0) and "img_norm_cfg" (means=0 and stds=1).
+
+    Args:
+        to_float32 (bool): Whether to convert the loaded image to a float32
+            numpy array. If set to False, the loaded image is an uint8 array.
+            Defaults to False.
+        color_type (str): The flag argument for :func:`mmcv.imfrombytes`.
+            Defaults to 'color'.
+        file_client_args (dict): Arguments to instantiate a FileClient.
+            See :class:`mmcv.fileio.FileClient` for details.
+            Defaults to ``dict(backend='disk')``.
+    """
+
+    def __init__(self,
+                 individual_pipeline,
+                 pad_val=0):
+        self.individual_pipeline = Compose(individual_pipeline)
+        self.pad_val = pad_val
+
+    def create_mosaic(self, mosaic_results):
+        # loads images in a mosaic
+
+        shapes = [results['pad_shape'] for results in mosaic_results]
+        yc = max(shapes[0][0], shapes[1][0])  # decided by the height of top 2 images
+        xc = max(shapes[0][1], shapes[2][1])  # decided by the width of left 2 images
+        canvas_height = yc + max(shapes[2][0], shapes[3][0])  # decided by yc and the height of bottom 2 images
+        canvas_width = xc + max(shapes[1][1], shapes[3][1])  # decided by xc and the width of right 2 images
+        canvas_shape = (canvas_height, canvas_width, shapes[0][2])
+
+        # base image with 4 tiles
+        canvas = dict()
+        for key in mosaic_results[0].get('img_fields', []):
+            canvas[key] = np.full(canvas_shape, self.pad_val, dtype=np.uint8)
+        for i, results in enumerate(mosaic_results):
+            h, w = results['pad_shape'][:2]
+            # place img in img4
+            if i == 0:  # top left
+                x1, y1, x2, y2 = xc - w, yc - h, xc, yc  # xmin, ymin, xmax, ymax (large image)
+            elif i == 1:  # top right
+                x1, y1, x2, y2 = xc, yc - h, xc + w, yc
+            elif i == 2:  # bottom left
+                x1, y1, x2, y2 = xc - w, yc, xc, yc + h
+            elif i == 3:  # bottom right
+                x1, y1, x2, y2 = xc, yc, xc + w, yc + h
+
+            for key in mosaic_results[0].get('img_fields', []):
+                canvas[key][y1:y2, x1:x2] = results[key]
+
+            for key in results.get('bbox_fields', []):
+                bboxes = results[key]
+                bboxes[:, 0::2] = bboxes[:, 0::2] + x1
+                bboxes[:, 1::2] = bboxes[:, 1::2] + y1
+                results[key] = bboxes
+
+        output_results = mosaic_results[0]
+        output_results['img_shape'] = canvas_shape
+        output_results['ori_shape'] = canvas_shape
+        output_results['scale'] = canvas_shape[:2]
+        output_results['scale_idx'] = -1
+        output_results['pad_shape'] = canvas_shape
+
+        for key in mosaic_results[0].get('img_fields', []):
+            output_results[key] = canvas[key]
+
+        for key in output_results.get('bbox_fields', []):
+            output_results[key] = np.concatenate([r[key] for r in mosaic_results], axis=0)
+
+        output_results['gt_labels'] = np.concatenate([r['gt_labels'] for r in mosaic_results], axis=0)
+
+        return output_results
+
+    def __call__(self, results):
+        mosaic_results = [results]
+        dataset = results['dataset']
+        # load another 3 images
+        for _ in range(3):
+            idx = random.randint(0, len(dataset) - 1)
+            img_info = dataset.data_infos[idx]
+            ann_info = dataset.get_ann_info(idx)
+            _results = dict(img_info=img_info, ann_info=ann_info)
+            if dataset.proposals is not None:
+                _results['proposals'] = dataset.proposals[idx]
+            dataset.pre_pipeline(_results)
+            mosaic_results.append(_results)
+
+        for idx in range(4):
+            mosaic_results[idx] = self.individual_pipeline(mosaic_results[idx])
+
+        return self.create_mosaic(mosaic_results)
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'individual_pipeline={self.individual_pipeline}, '
+                    f'pad_val={self.pad_val})')
+        return repr_str

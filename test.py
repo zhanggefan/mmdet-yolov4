@@ -48,8 +48,8 @@ torch.backends.cudnn.benchmark = True
 #         self.bbox_head = YOLOV4Head(num_classes=80, in_channels=[320, 640, 1280], test_cfg=cfg.test_cfg)
 
 
-cfg = Config.fromfile('configs/yolov4/yolov4_coco.py')
-# cfg.data.workers_per_gpu = 0
+cfg = Config.fromfile('configs/yolov4/yolov4_coco_mosaic.py')
+cfg.data.workers_per_gpu = 0
 cfg.gpu_ids = range(1)
 cfg.seed = 0
 cfg.work_dir = 'work_dirs/yolov4/yolov4_20201025'
@@ -63,10 +63,10 @@ model = YOLOV4(
 )
 model.init_weights()
 
-# cfg.resume_from = 'work_dirs/yolov4/yolov4_20201020/epoch_290.pth'
-# cfg.custom_hooks[1].resume_from = cfg.resume_from
-# model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201020/epoch_300.pth')['state_dict'], strict=False)
-model.load_state_dict(torch.load('work_dirs/yolov4/epoch_320_yolo.pth'), strict=False)
+# cfg.resume_from = 'work_dirs/yolov4/yolov4_20201025/epoch_2.pth'
+# cfg.custom_hooks[-1].resume_from = cfg.resume_from
+model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201020/epoch_300.pth')['state_dict'], strict=False)
+# model.load_state_dict(torch.load('work_dirs/yolov4/epoch_320_yolo.pth'), strict=False)
 
 # testing -----------------------------------------------------------------
 # dataset = build_dataset(cfg.data.val, dict(test_mode=True))

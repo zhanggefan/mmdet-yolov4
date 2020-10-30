@@ -364,6 +364,12 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
                 mlvl_anchors = self.anchor_generator.grid_anchors(featmap_sizes, device)
 
+                # valid_flag_list = []
+                # for img_id, img_meta in enumerate(img_metas):
+                #     multi_level_flags = self.anchor_generator.valid_flags(
+                #         featmap_sizes, img_meta['pad_shape'], device)
+                #     valid_flag_list.append(multi_level_flags)
+
                 losses_cls, losses_conf, losses_bbox = multi_apply(
                     self.loss_single_no_assigner,
                     pred_maps,

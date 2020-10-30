@@ -9,13 +9,13 @@ test_cfg = dict(
     max_per_img=100)
 
 # optimizer
-optimizer = dict(type='SGD', lr=0.001, momentum=0.93, weight_decay=0.0005,
+optimizer = dict(type='SGD', lr=0.002, momentum=0.937, weight_decay=0.0005,
                  nesterov=True,
-                 paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0))
+                 paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0.))
 optimizer_config = dict(
     type='AMPGradAccumulateOptimizerHook',
     accumulation=2,
-    grad_clip=dict(max_norm=35, norm_type=2),
+    # grad_clip=dict(max_norm=35, norm_type=2),
 )
 
 # optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
@@ -24,12 +24,13 @@ optimizer_config = dict(
 lr_config = dict(
     policy='CosineAnnealing',
     min_lr_ratio=0.2,
-    warmup='linear',
-    warmup_iters=2000,  # same as burn-in in darknet
-    warmup_ratio=0.001)
+    # warmup='linear',
+    # warmup_iters=2000,  # same as burn-in in darknet
+    # warmup_ratio=0.001,
+)
 # runtime settings
 log_config = dict(
-    interval=50,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
@@ -52,6 +53,6 @@ custom_hooks = [
     )
 ]
 
-total_epochs = 400
+total_epochs = 300
 evaluation = dict(interval=1, metric=['bbox'])
 # fp16 = dict(loss_scale=512.)
