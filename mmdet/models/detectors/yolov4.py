@@ -336,8 +336,23 @@ class MosaicPipeline(object):
         self.individual_pipeline = Compose(individual_pipeline)
         self.pad_val = pad_val
 
-    def create_mosaic(self, mosaic_results):
-        # loads images in a mosaic
+    def __call__(self, results):
+        input_results = results.copy()
+        mosaic_results = [results]
+        dataset = results['dataset']
+        # load another 3 images
+        for _ in range(3):
+            idx = random.randint(0, len(dataset) - 1)
+            img_info = dataset.data_infos[idx]
+            ann_info = dataset.get_ann_info(idx)
+            _results = dict(img_info=img_info, ann_info=ann_info)
+            if dataset.proposals is not None:
+                _results['proposals'] = dataset.proposals[idx]
+            dataset.pre_pipeline(_results)
+            mosaic_results.append(_results)
+
+        for idx in range(4):
+            mosaic_results[idx] = self.individual_pipeline(mosaic_results[idx])
 
         shapes = [results['pad_shape'] for results in mosaic_results]
         yc = max(shapes[0][0], shapes[1][0])  # decided by the height of top 2 images
@@ -371,7 +386,7 @@ class MosaicPipeline(object):
                 bboxes[:, 1::2] = bboxes[:, 1::2] + y1
                 results[key] = bboxes
 
-        output_results = dict()
+        output_results = input_results
         output_results['img_fields'] = mosaic_results[0].get('img_fields', [])
         output_results['bbox_fields'] = mosaic_results[0].get('bbox_fields', [])
         for key in output_results['img_fields']:
@@ -386,25 +401,6 @@ class MosaicPipeline(object):
         output_results['ori_shape'] = canvas_shape
 
         return output_results
-
-    def __call__(self, results):
-        mosaic_results = [results]
-        dataset = results['dataset']
-        # load another 3 images
-        for _ in range(3):
-            idx = random.randint(0, len(dataset) - 1)
-            img_info = dataset.data_infos[idx]
-            ann_info = dataset.get_ann_info(idx)
-            _results = dict(img_info=img_info, ann_info=ann_info)
-            if dataset.proposals is not None:
-                _results['proposals'] = dataset.proposals[idx]
-            dataset.pre_pipeline(_results)
-            mosaic_results.append(_results)
-
-        for idx in range(4):
-            mosaic_results[idx] = self.individual_pipeline(mosaic_results[idx])
-
-        return self.create_mosaic(mosaic_results)
 
     def __repr__(self):
         repr_str = (f'{self.__class__.__name__}('
