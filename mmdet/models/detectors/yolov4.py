@@ -371,20 +371,19 @@ class MosaicPipeline(object):
                 bboxes[:, 1::2] = bboxes[:, 1::2] + y1
                 results[key] = bboxes
 
-        output_results = mosaic_results[0]
-        output_results['img_shape'] = canvas_shape
-        output_results['ori_shape'] = canvas_shape
-        output_results['scale'] = canvas_shape[:2]
-        output_results['scale_idx'] = -1
-        output_results['pad_shape'] = canvas_shape
-
-        for key in mosaic_results[0].get('img_fields', []):
+        output_results = dict()
+        output_results['img_fields'] = mosaic_results[0].get('img_fields', [])
+        output_results['bbox_fields'] = mosaic_results[0].get('bbox_fields', [])
+        for key in output_results['img_fields']:
             output_results[key] = canvas[key]
 
-        for key in output_results.get('bbox_fields', []):
+        for key in output_results['bbox_fields']:
             output_results[key] = np.concatenate([r[key] for r in mosaic_results], axis=0)
 
         output_results['gt_labels'] = np.concatenate([r['gt_labels'] for r in mosaic_results], axis=0)
+
+        output_results['img_shape'] = canvas_shape
+        output_results['ori_shape'] = canvas_shape
 
         return output_results
 
