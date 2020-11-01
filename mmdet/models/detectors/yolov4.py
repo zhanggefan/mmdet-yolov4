@@ -355,11 +355,8 @@ class MosaicPipeline(object):
             mosaic_results[idx] = self.individual_pipeline(mosaic_results[idx])
 
         shapes = [results['pad_shape'] for results in mosaic_results]
-        yc = max(shapes[0][0], shapes[1][0])  # decided by the height of top 2 images
-        xc = max(shapes[0][1], shapes[2][1])  # decided by the width of left 2 images
-        canvas_height = yc + max(shapes[2][0], shapes[3][0])  # decided by yc and the height of bottom 2 images
-        canvas_width = xc + max(shapes[1][1], shapes[3][1])  # decided by xc and the width of right 2 images
-        canvas_shape = (canvas_height, canvas_width, shapes[0][2])
+        cxy = max(shapes[0][0], shapes[1][0], shapes[0][1], shapes[2][1])
+        canvas_shape = (cxy * 2, cxy * 2, shapes[0][2])
 
         # base image with 4 tiles
         canvas = dict()
@@ -369,13 +366,13 @@ class MosaicPipeline(object):
             h, w = results['pad_shape'][:2]
             # place img in img4
             if i == 0:  # top left
-                x1, y1, x2, y2 = xc - w, yc - h, xc, yc  # xmin, ymin, xmax, ymax (large image)
+                x1, y1, x2, y2 = cxy - w, cxy - h, cxy, cxy  # xmin, ymin, xmax, ymax (large image)
             elif i == 1:  # top right
-                x1, y1, x2, y2 = xc, yc - h, xc + w, yc
+                x1, y1, x2, y2 = cxy, cxy - h, cxy + w, cxy
             elif i == 2:  # bottom left
-                x1, y1, x2, y2 = xc - w, yc, xc, yc + h
+                x1, y1, x2, y2 = cxy - w, cxy, cxy, cxy + h
             elif i == 3:  # bottom right
-                x1, y1, x2, y2 = xc, yc, xc + w, yc + h
+                x1, y1, x2, y2 = cxy, cxy, cxy + w, cxy + h
 
             for key in mosaic_results[0].get('img_fields', []):
                 canvas[key][y1:y2, x1:x2] = results[key]
@@ -387,6 +384,8 @@ class MosaicPipeline(object):
                 results[key] = bboxes
 
         output_results = input_results
+        output_results['filename'] = None
+        output_results['ori_filename'] = None
         output_results['img_fields'] = mosaic_results[0].get('img_fields', [])
         output_results['bbox_fields'] = mosaic_results[0].get('bbox_fields', [])
         for key in output_results['img_fields']:
