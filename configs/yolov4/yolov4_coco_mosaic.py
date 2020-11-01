@@ -13,10 +13,41 @@ train_pipeline = [
              dict(type='RandomFlip', flip_ratio=0.5)
          ],
          pad_val=114),
-    dict(type='Resize', img_scale=(1280, 1280), ratio_range=(0.5, 1.5), keep_ratio=True),
-    dict(type='RandomCrop', crop_size=(640, 640)),
+    dict(type='RandomFlip', flip_ratio=0.5),
+    dict(type='Albu',
+         update_pad_shape=True,
+         skip_img_without_anno=True,
+         bbox_params=dict(
+             type='BboxParams',
+             format='pascal_voc',
+             min_area=4,
+             min_visibility=0.2,
+             label_fields=['gt_labels']
+         ),
+         transforms=[
+             dict(
+                 type='ShiftScaleRotate',
+                 shift_limit=0.25,
+                 scale_limit=0.5,
+                 rotate_limit=0,
+                 interpolation=1,
+                 border_mode=0,
+                 value=(114, 114, 114),
+                 always_apply=True),
+             dict(
+                 type='HueSaturationValue',
+                 hue_shift_limit=4,
+                 sat_shift_limit=30,
+                 val_shift_limit=20,
+                 always_apply=True),
+             dict(
+                 type='CenterCrop',
+                 width=640,
+                 height=640,
+                 always_apply=True)
+         ]),
     dict(type='Normalize', **img_norm_cfg),
-    dict(type='Pad', size=(640, 640), pad_val=114 / 255),
+    # dict(type='Pad', size=(640, 640), pad_val=114 / 255),
     dict(type='DefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels']),
 ]
@@ -40,13 +71,13 @@ data = dict(
     workers_per_gpu=8,
     train=dict(
         type=dataset_type,
-        ann_file=data_root + 'annotations/instances_train2017.json',
+        ann_file=data_root + 'annotations/coco128.json',
         img_prefix=data_root + 'train2017/',
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
-        ann_file=data_root + 'annotations/instances_val2017.json',
-        img_prefix=data_root + 'val2017/',
+        ann_file=data_root + 'annotations/coco128.json',
+        img_prefix=data_root + 'train2017/',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
@@ -61,53 +92,50 @@ test_cfg = dict(
     score_thr=0.001,
     conf_thr=0.001,
     nms=dict(type='nms', iou_threshold=0.65),
-    max_per_img=100)
+    max_per_img=256)
 
 # optimizer
-optimizer = dict(type='SGD', lr=0.002, momentum=0.937, weight_decay=0.0005,
+optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0.))
 optimizer_config = dict(
     type='AMPGradAccumulateOptimizerHook',
-    accumulation=2,
+    # accumulation=2,
     # grad_clip=dict(max_norm=35, norm_type=2),
 )
-
-# optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
 
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
     min_lr_ratio=0.2,
-    # warmup='linear',
-    # warmup_iters=2000,  # same as burn-in in darknet
-    # warmup_ratio=0.001,
+    warmup='linear',
+    warmup_iters=1000,  # same as burn-in in darknet
+    warmup_ratio=0.001,
 )
 # runtime settings
 log_config = dict(
-    interval=10,
+    interval=1,
     hooks=[
         dict(type='TextLoggerHook'),
         # dict(type='TensorboardLoggerHook')
     ])
 
 custom_hooks = [
-    # dict(
-    #     type='LrBiasPreHeatHook',
-    #     preheat_iters=2000,
-    #     preheat_ratio=10.,
-    #     priority='NORMAL'
-    # ),
+    dict(
+        type='LrBiasPreHeatHook',
+        preheat_iters=1000,
+        preheat_ratio=10.,
+        priority='NORMAL'
+    ),
     dict(
         type='YOLOV4EMAHook',
         momentum=0.9999,
-        interval=2,
-        warm_up=4000,
+        interval=1,
+        warm_up=2000,
         resume_from=None,
         priority='HIGH'
     )
 ]
 
 total_epochs = 300
-evaluation = dict(interval=1, metric=['bbox'])
 # fp16 = dict(loss_scale=512.)
