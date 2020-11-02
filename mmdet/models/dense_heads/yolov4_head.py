@@ -277,13 +277,6 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         """
         cfg = self.test_cfg if cfg is None else cfg
 
-        # Filtering out all predictions with conf < conf_thr
-        conf_thr = cfg.get('conf_thr', -1)
-        conf_inds = conf_pred.ge(conf_thr)
-        bbox_pred = bbox_pred[conf_inds, :]
-        cls_pred = cls_pred[conf_inds, :]
-        conf_pred = conf_pred[conf_inds]
-
         # Get top-k prediction
         nms_pre = cfg.get('nms_pre', -1)
         if 0 < nms_pre < conf_pred.size(0):
@@ -291,6 +284,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             bbox_pred = bbox_pred[topk_inds, :]
             cls_pred = cls_pred[topk_inds, :]
             conf_pred = conf_pred[topk_inds]
+
+        cls_pred *= conf_pred[:, None]
 
         if with_nms and (cls_pred.size(0) == 0):
             return torch.zeros((0, 5)), torch.zeros((0,))
@@ -309,8 +304,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 cls_pred,
                 cfg.score_thr,
                 cfg.nms,
-                cfg.max_per_img,
-                score_factors=conf_pred)
+                cfg.max_per_img)
             return det_bboxes, det_labels
         else:
             cls_pred = cls_pred * conf_pred[:, None]

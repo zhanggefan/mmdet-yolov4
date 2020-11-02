@@ -126,15 +126,21 @@ class Fp16GradAccumulateOptimizerHook(Fp16OptimizerHook):
 
 
 @HOOKS.register_module()
-class LrBiasPreHeatHook(Hook):
+class YoloV4WarmUpHook(Hook):
     def __init__(self,
-                 preheat_iters=2000,
-                 preheat_ratio=10.):
+                 warmup_iters=1000,
+                 lr_weight_warmup=0.,
+                 lr_bias_warmup=0.1,
+                 momentum_warmup=0.9):
 
-        self.preheat_iters = preheat_iters
-        self.preheat_ratio = preheat_ratio
+        self.warmup_iters = warmup_iters
+        self.lr_weight_warmup = lr_weight_warmup
+        self.lr_bias_warmup = lr_bias_warmup
+        self.momentum_warmup = momentum_warmup
 
         self.bias_base_lr = {}  # initial lr for all param groups
+        self.weight_base_lr = {}
+        self.base_momentum = {}
 
     def before_run(self, runner):
         # NOTE: when resuming from a checkpoint, if 'initial_lr' is not saved,
@@ -143,17 +149,27 @@ class LrBiasPreHeatHook(Hook):
             runner.logger.warning(f"optimizer config does not support preheat because"
                                   " it is not using seperate param-group for each parameter")
             return
+
         for group_ind, (name, param) in enumerate(runner.model.named_parameters()):
-            if '.bias' in name:
-                group = runner.optimizer.param_groups[group_ind]
+            group = runner.optimizer.param_groups[group_ind]
+            self.base_momentum[group_ind] = group['momentum']
+            if name.endswith('.bias'):
                 self.bias_base_lr[group_ind] = group['lr']
+            elif name.endswith('.weight'):
+                self.weight_base_lr[group_ind] = group['lr']
 
     def before_train_iter(self, runner):
-        if runner.iter < self.preheat_iters:
-            prog = runner.iter / self.preheat_iters
-            cur_ratio = (self.preheat_ratio - 1) * (1 - prog) + 1
-            for group_ind, lr_init_value in self.bias_base_lr.items():
-                runner.optimizer.param_groups[group_ind]['lr'] = cur_ratio * lr_init_value
+        if runner.iter <= self.warmup_iters:
+            prog = runner.iter / self.warmup_iters
+            for group_ind, bias_base in self.bias_base_lr.items():
+                bias_warmup_lr = prog * bias_base + (1 - prog) * self.lr_bias_warmup
+                runner.optimizer.param_groups[group_ind]['lr'] = bias_warmup_lr
+            for group_ind, weight_base in self.weight_base_lr.items():
+                weight_warmup_lr = prog * weight_base + (1 - prog) * self.lr_weight_warmup
+                runner.optimizer.param_groups[group_ind]['lr'] = weight_warmup_lr
+            for group_ind, momentum_base in self.base_momentum.items():
+                warmup_momentum = prog * momentum_base + (1 - prog) * self.momentum_warmup
+                runner.optimizer.param_groups[group_ind]['momentum'] = warmup_momentum
 
 
 @HOOKS.register_module()
