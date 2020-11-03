@@ -95,7 +95,7 @@ test_cfg = dict(
     nms_pre=-1,
     score_thr=0.001,
     nms=dict(type='nms', iou_threshold=0.65),
-    max_per_img=-1)
+    max_per_img=300)
 
 # optimizer
 optimizer = dict(type='SGD', lr=0.006, momentum=0.9, weight_decay=0.0005,
