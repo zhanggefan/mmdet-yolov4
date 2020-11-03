@@ -219,7 +219,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 # conf score
                 mlvl_conf_pred.append(lvl_pred_maps[:, :, 4])
                 # bbox transform
-                lvl_pred_maps[:, :, :2] = lvl_pred_maps[:, :, :2] * 2. - 0.5
+                lvl_pred_maps[:, :, :2] = lvl_pred_maps[:, :, :2] * 2. - 1.
                 lvl_pred_maps[:, :, 2:4] = (lvl_pred_maps[:, :, 2:4] * 2) ** 2
                 lvl_bbox_pred = lvl_pred_maps[:, :, :4].reshape(-1, 4)
                 lvl_anchors = mlvl_anchors[lvl][None, ...].repeat((num_image, 1, 1))
@@ -437,8 +437,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
             # apply transforms on bbox prediction
             pred_bbox = pred_map_pos[..., :4].sigmoid()
-            pred_bbox_xy = pred_bbox[..., :2] * 2. - 0.5
-            pred_bbox_wh = (pred_bbox[..., 2:] * 2) ** 2
+            pred_bbox_xy = pred_bbox[..., :2] * 2. - 1.
+            pred_bbox_wh = (pred_bbox[..., 2:] * 2.) ** 2.
             pred_bbox = self.bbox_coder.decode(anchor_pos, torch.cat((pred_bbox_xy, pred_bbox_wh), dim=-1), stride)
 
             giou_loss = self.loss_bbox(pred_bbox, target_bboxes, reduction_override='none')
