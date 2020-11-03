@@ -52,7 +52,7 @@ cfg = Config.fromfile('configs/yolov4/yolov4_coco_mosaic.py')
 # cfg.data.workers_per_gpu = 0
 cfg.gpu_ids = range(1)
 cfg.seed = 0
-cfg.work_dir = 'work_dirs/yolov4/yolov4_20201031'
+cfg.work_dir = 'work_dirs/yolov4/yolov4_20201101'
 
 model = YOLOV4(
     backbone=dict(type='DarknetCSP', scale='s5p', out_indices=[3, 4, 5]),
@@ -63,12 +63,13 @@ model = YOLOV4(
 )
 model.init_weights()
 
-# cfg.resume_from = 'work_dirs/yolov4/yolov4_20201025/epoch_2.pth'
-# cfg.custom_hooks[-1].resume_from = cfg.resume_from
-model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201020/epoch_300.pth')['state_dict'], strict=False)
+cfg.resume_from = 'work_dirs/yolov4/yolov4_20201101/epoch_10.pth'
+cfg.custom_hooks[-1].resume_from = cfg.resume_from
+# model.load_state_dict(torch.load('work_dirs/yolov4/epoch_300.pth'), strict=False)
 # model.load_state_dict(torch.load('work_dirs/yolov4/epoch_320_yolo.pth'), strict=False)
 
 # testing -----------------------------------------------------------------
+# model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201101/epoch_10.pth')['state_dict'], strict=False)
 # dataset = build_dataset(cfg.data.val, dict(test_mode=True))
 # dataloader = build_dataloader(
 #     dataset,
@@ -78,7 +79,7 @@ model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201020/epoch_300.pth
 #     shuffle=False)
 # model.eval()
 # model.CLASSES = dataset.CLASSES
-# result = single_gpu_test(MMDataParallel(model), dataloader, False, show_score_thr=0.1)
+# result = single_gpu_test(MMDataParallel(model), dataloader, False, show_score_thr=0.3)
 # dataset.evaluate(result)
 # testing -----------------------------------------------------------------
 

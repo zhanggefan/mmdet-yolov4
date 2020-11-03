@@ -56,6 +56,7 @@ class CocoDataset(CustomDataset):
         self.cat_ids = self.coco.get_cat_ids(cat_names=self.CLASSES)
         self.cat2label = {cat_id: i for i, cat_id in enumerate(self.cat_ids)}
         self.img_ids = self.coco.get_img_ids()
+        self.img_ids.sort()
         data_infos = []
         for i in self.img_ids:
             info = self.coco.load_imgs([i])[0]
@@ -93,29 +94,37 @@ class CocoDataset(CustomDataset):
         ann_info = self.coco.load_anns(ann_ids)
         return [ann['category_id'] for ann in ann_info]
 
-    def _filter_imgs(self, min_size=32):
-        """Filter images too small or without ground truths."""
-        valid_inds = []
-        # obtain images that contain annotation
-        ids_with_ann = set(_['image_id'] for _ in self.coco.anns.values())
-        # obtain images that contain annotations of the required categories
-        ids_in_cat = set()
-        for i, class_id in enumerate(self.cat_ids):
-            ids_in_cat |= set(self.coco.cat_img_map[class_id])
-        # merge the image id sets of the two conditions and use the merged set
-        # to filter out images if self.filter_empty_gt=True
-        ids_in_cat &= ids_with_ann
+    # def _filter_imgs(self, min_size=32):
+    #     """Filter images too small or without ground truths."""
+    #     valid_inds = []
+    #     # obtain images that contain annotation
+    #     ids_with_ann = set(_['image_id'] for _ in self.coco.anns.values())
+    #     # obtain images that contain annotations of the required categories
+    #     ids_in_cat = set()
+    #     for i, class_id in enumerate(self.cat_ids):
+    #         ids_in_cat |= set(self.coco.cat_img_map[class_id])
+    #     # merge the image id sets of the two conditions and use the merged set
+    #     # to filter out images if self.filter_empty_gt=True
+    #     ids_in_cat &= ids_with_ann
+    #
+    #     valid_img_ids = []
+    #     for i, img_info in enumerate(self.data_infos):
+    #         img_id = self.img_ids[i]
+    #         if self.filter_empty_gt and img_id not in ids_in_cat:
+    #             continue
+    #         if min(img_info['width'], img_info['height']) >= min_size:
+    #             valid_inds.append(i)
+    #             valid_img_ids.append(img_id)
+    #     self.img_ids = valid_img_ids
+    #     return valid_inds
 
-        valid_img_ids = []
-        for i, img_info in enumerate(self.data_infos):
-            img_id = self.img_ids[i]
-            if self.filter_empty_gt and img_id not in ids_in_cat:
-                continue
-            if min(img_info['width'], img_info['height']) >= min_size:
-                valid_inds.append(i)
-                valid_img_ids.append(img_id)
-        self.img_ids = valid_img_ids
-        return valid_inds
+    def _set_group_flag(self):
+        """Set flag according to image aspect ratio.
+
+        Images with aspect ratio greater than 1 will be set as group 1,
+        otherwise group 0.
+        """
+        self.flag = np.zeros(len(self), dtype=np.uint8)
 
     def _parse_ann_info(self, img_info, ann_info):
         """Parse bbox and mask annotation.
@@ -146,7 +155,7 @@ class CocoDataset(CustomDataset):
             if ann['category_id'] not in self.cat_ids:
                 continue
             bbox = [x1, y1, x1 + w, y1 + h]
-            if ann.get('iscrowd', False):
+            if False and ann.get('iscrowd', False):
                 gt_bboxes_ignore.append(bbox)
             else:
                 gt_bboxes.append(bbox)

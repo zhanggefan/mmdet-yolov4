@@ -6,6 +6,7 @@ import mmcv
 from mmcv import Config
 
 from mmdet.datasets.builder import build_dataset
+from mmdet.models.detectors import YOLOV4
 
 
 def parse_args():
@@ -53,6 +54,9 @@ def main():
         filename = os.path.join(args.output_dir,
                                 Path(item['filename']).name
                                 ) if args.output_dir is not None else None
+
+        print(len(item['gt_bboxes']))
+
         mmcv.imshow_det_bboxes(
             item['img'],
             item['gt_bboxes'],
