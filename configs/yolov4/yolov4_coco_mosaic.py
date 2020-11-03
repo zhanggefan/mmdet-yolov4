@@ -64,8 +64,8 @@ test_pipeline = [
         transforms=[
             dict(type='Resize', keep_ratio=True),
             dict(type='RandomFlip'),
+            dict(type='Pad', size_divisor=32, pad_val=(114, 114, 114)),
             dict(type='Normalize', **img_norm_cfg),
-            dict(type='RoundPad', size_divisor=32, pad_val=114 / 255),
             dict(type='ImageToTensor', keys=['img']),
             dict(type='Collect', keys=['img']),
         ])
