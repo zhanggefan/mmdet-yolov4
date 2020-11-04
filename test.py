@@ -63,13 +63,13 @@ model = YOLOV4(
 )
 model.init_weights()
 
-cfg.resume_from = 'work_dirs/yolov4/yolov4_20201101/epoch_20.pth'
+cfg.resume_from = 'work_dirs/yolov4/yolov4_20201101/epoch_40.pth'
 cfg.custom_hooks[-1].resume_from = cfg.resume_from
 # model.load_state_dict(torch.load('work_dirs/yolov4/epoch_300.pth'), strict=False)
 # model.load_state_dict(torch.load('work_dirs/yolov4/epoch_320_yolo.pth'), strict=False)
 
 # testing -----------------------------------------------------------------
-# model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201101/epoch_20.pth')['state_dict'], strict=False)
+# model.load_state_dict(torch.load('work_dirs/yolov4/yolov4_20201101/epoch_40.pth')['state_dict'], strict=False)
 # dataset = build_dataset(cfg.data.val, dict(test_mode=True))
 # dataloader = build_dataloader(
 #     dataset,

@@ -12,6 +12,7 @@ import mmcv
 import numpy as np
 import os.path as osp
 import random
+import cv2
 
 
 @DETECTORS.register_module()
@@ -258,24 +259,6 @@ class YOLOV4EMAHook(Hook):
 
 @PIPELINES.register_module()
 class MosaicPipeline(object):
-    """Load an image from file.
-
-    Required keys are "img_prefix" and "img_info" (a dict that must contain the
-    key "filename"). Added or updated keys are "filename", "img", "img_shape",
-    "ori_shape" (same as `img_shape`), "pad_shape" (same as `img_shape`),
-    "scale_factor" (1.0) and "img_norm_cfg" (means=0 and stds=1).
-
-    Args:
-        to_float32 (bool): Whether to convert the loaded image to a float32
-            numpy array. If set to False, the loaded image is an uint8 array.
-            Defaults to False.
-        color_type (str): The flag argument for :func:`mmcv.imfrombytes`.
-            Defaults to 'color'.
-        file_client_args (dict): Arguments to instantiate a FileClient.
-            See :class:`mmcv.fileio.FileClient` for details.
-            Defaults to ``dict(backend='disk')``.
-    """
-
     def __init__(self,
                  individual_pipeline,
                  pad_val=0):
@@ -351,4 +334,36 @@ class MosaicPipeline(object):
         repr_str = (f'{self.__class__.__name__}('
                     f'individual_pipeline={self.individual_pipeline}, '
                     f'pad_val={self.pad_val})')
+        return repr_str
+
+
+@PIPELINES.register_module()
+class HueSaturationValueJitter(object):
+    
+    def __init__(self, hue_ratio=0.5, saturation_ratio=0.5, value_ratio=0.5):
+        self.h_ratio = hue_ratio
+        self.s_ratio = saturation_ratio
+        self.v_ratio = value_ratio
+
+    def __call__(self, result):
+        for key in result.get('img_fields', []):
+            img = result[key]
+            r = np.random.uniform(-1, 1, 3) * [self.h_ratio, self.s_ratio, self.v_ratio] + 1  # random gains
+            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+            dtype = img.dtype  # uint8
+
+            x = np.arange(0, 256, dtype=np.int16)
+            lut_hue = ((x * r[0]) % 180).astype(dtype)
+            lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+            lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+
+            img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
+            cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=result[key])  # no return needed
+        return result
+        
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'hue_ratio={self.h_ratio}, '
+                    f'saturation_ratio={self.s_ratio}, '
+                    f'value_ratio={self.v_ratio})')
         return repr_str

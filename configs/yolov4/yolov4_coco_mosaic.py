@@ -43,14 +43,12 @@ train_pipeline = [
                  type='CenterCrop',
                  width=640,
                  height=640,
-                 always_apply=True),
-             dict(
-                 type='HueSaturationValue',
-                 hue_shift_limit=4,
-                 sat_shift_limit=30,
-                 val_shift_limit=20,
-                 always_apply=True),
+                 always_apply=True)
          ]),
+    dict(type='HueSaturationValueJitter',
+         hue_ratio=0.015, 
+         saturation_ratio=0.7, 
+         value_ratio=0.4),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='DefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
@@ -70,6 +68,7 @@ test_pipeline = [
             dict(type='Collect', keys=['img']),
         ])
 ]
+
 data = dict(
     samples_per_gpu=32,
     workers_per_gpu=8,
@@ -88,6 +87,39 @@ data = dict(
         ann_file=data_root + 'annotations/instances_val2017.json',
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
+log_config = dict(
+    interval=50,
+    hooks=[
+        dict(type='TextLoggerHook'),
+        # dict(type='TensorboardLoggerHook')
+    ])
+
+# data = dict(
+#     samples_per_gpu=32,
+#     workers_per_gpu=0,
+#     train=dict(
+#         type=dataset_type,
+#         ann_file=data_root + 'annotations/coco128.json',
+#         img_prefix=data_root + 'train2017/',
+#         pipeline=train_pipeline),
+#     val=dict(
+#         type=dataset_type,
+#         ann_file=data_root + 'annotations/coco128.json',
+#         img_prefix=data_root + 'train2017/',
+#         pipeline=test_pipeline),
+#     test=dict(
+#         type=dataset_type,
+#         ann_file=data_root + 'annotations/instances_val2017.json',
+#         img_prefix=data_root + 'val2017/',
+#         pipeline=test_pipeline))
+
+# log_config = dict(
+#     interval=4,
+#     hooks=[
+#         dict(type='TextLoggerHook'),
+#         # dict(type='TensorboardLoggerHook')
+#     ])
+
 evaluation = dict(interval=1, metric='bbox')
 
 test_cfg = dict(
@@ -112,13 +144,6 @@ lr_config = dict(
     policy='CosineAnnealing',
     min_lr_ratio=0.2,
 )
-# runtime settings
-log_config = dict(
-    interval=50,
-    hooks=[
-        dict(type='TextLoggerHook'),
-        # dict(type='TensorboardLoggerHook')
-    ])
 
 custom_hooks = [
     dict(
@@ -142,4 +167,4 @@ custom_hooks = [
 total_epochs = 300
 # fp16 = dict(loss_scale=512.)
 
-checkpoint_config = dict(interval=10)
+checkpoint_config = dict(interval=5)
