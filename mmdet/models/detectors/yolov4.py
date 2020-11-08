@@ -51,12 +51,12 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
         self.accumulation = kwargs.pop('accumulation', 1)
         self.scaler = GradScaler()
         super(AMPGradAccumulateOptimizerHook, self).__init__(*wargs, **kwargs)
-        if self.grad_clip is not None:
-            self.grad_clip_base = self.grad_clip['max_norm']
 
     def before_run(self, runner):
         assert hasattr(runner.model.module,
                        'use_amp') and runner.model.module.use_amp, 'model should support AMP when using this optimizer hook!'
+        runner.model.zero_grad()
+        runner.optimizer.zero_grad()
 
     def before_train_iter(self, runner):
         if runner.iter % self.accumulation == 0:
@@ -68,15 +68,16 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
         scaled_loss.backward()
 
         if (runner.iter + 1) % self.accumulation == 0:
+            scale = self.scaler.get_scale()
             if self.grad_clip is not None:
-                scale = self.scaler.get_scale()
-                self.grad_clip['max_norm'] = self.grad_clip_base * scale
+                self.scaler.unscale_(runner.optimizer)
                 grad_norm = self.clip_grads(runner.model.parameters())
                 if grad_norm is not None:
                     # Add grad norm to the logger
-                    runner.log_buffer.update({'grad_norm': float(grad_norm) / float(scale),
-                                              'grad_scale': float(scale)},
+                    runner.log_buffer.update({'grad_norm': float(grad_norm)},
                                              runner.outputs['num_samples'])
+            runner.log_buffer.update({'grad_scale': float(scale)},
+                                     runner.outputs['num_samples'])
             self.scaler.step(runner.optimizer)
             self.scaler.update()
 
@@ -117,7 +118,8 @@ class Fp16GradAccumulateOptimizerHook(Fp16OptimizerHook):
             runner.model.zero_grad = dummyfun
             runner.optimizer.zero_grad = dummyfun
 
-            super(Fp16GradAccumulateOptimizerHook, self).after_train_iter(runner)
+            super(Fp16GradAccumulateOptimizerHook,
+                  self).after_train_iter(runner)
 
             runner.model.zero_grad = model_zero_grad
             runner.optimizer.zero_grad = optimizer_zero_grad
@@ -163,13 +165,16 @@ class YoloV4WarmUpHook(Hook):
         if runner.iter <= self.warmup_iters:
             prog = runner.iter / self.warmup_iters
             for group_ind, bias_base in self.bias_base_lr.items():
-                bias_warmup_lr = prog * bias_base + (1 - prog) * self.lr_bias_warmup
+                bias_warmup_lr = prog * bias_base + \
+                                 (1 - prog) * self.lr_bias_warmup
                 runner.optimizer.param_groups[group_ind]['lr'] = bias_warmup_lr
             for group_ind, weight_base in self.weight_base_lr.items():
-                weight_warmup_lr = prog * weight_base + (1 - prog) * self.lr_weight_warmup
+                weight_warmup_lr = prog * weight_base + \
+                                   (1 - prog) * self.lr_weight_warmup
                 runner.optimizer.param_groups[group_ind]['lr'] = weight_warmup_lr
             for group_ind, momentum_base in self.base_momentum.items():
-                warmup_momentum = prog * momentum_base + (1 - prog) * self.momentum_warmup
+                warmup_momentum = prog * momentum_base + \
+                                  (1 - prog) * self.momentum_warmup
                 runner.optimizer.param_groups[group_ind]['momentum'] = warmup_momentum
 
 
@@ -232,11 +237,13 @@ class YOLOV4EMAHook(Hook):
         if (runner.iter + 1) % self.interval != 0:
             return
         for name, parameter in self.model_parameters.items():
-            momentum = self.momentum * (1 - math.exp(-runner.iter / self.warm_up))
+            momentum = self.momentum * \
+                       (1 - math.exp(-runner.iter / self.warm_up))
             if parameter.dtype.is_floating_point:
                 buffer_name = self.param_ema_buffer[name]
                 buffer_parameter = self.model_buffers[buffer_name]
-                buffer_parameter.mul_(momentum).add_(1 - momentum, parameter.data)
+                buffer_parameter.mul_(momentum).add_(
+                    1 - momentum, parameter.data)
 
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the
@@ -295,7 +302,7 @@ class MosaicPipeline(object):
             h, w = results['pad_shape'][:2]
             # place img in img4
             if i == 0:  # top left
-                x1, y1, x2, y2 = cxy - w, cxy - h, cxy, cxy  # xmin, ymin, xmax, ymax (large image)
+                x1, y1, x2, y2 = cxy - w, cxy - h, cxy, cxy
             elif i == 1:  # top right
                 x1, y1, x2, y2 = cxy, cxy - h, cxy + w, cxy
             elif i == 2:  # bottom left
@@ -316,17 +323,22 @@ class MosaicPipeline(object):
         output_results['filename'] = None
         output_results['ori_filename'] = None
         output_results['img_fields'] = mosaic_results[0].get('img_fields', [])
-        output_results['bbox_fields'] = mosaic_results[0].get('bbox_fields', [])
+        output_results['bbox_fields'] = mosaic_results[0].get(
+            'bbox_fields', [])
         for key in output_results['img_fields']:
             output_results[key] = canvas[key]
 
         for key in output_results['bbox_fields']:
-            output_results[key] = np.concatenate([r[key] for r in mosaic_results], axis=0)
+            output_results[key] = np.concatenate(
+                [r[key] for r in mosaic_results], axis=0)
 
-        output_results['gt_labels'] = np.concatenate([r['gt_labels'] for r in mosaic_results], axis=0)
+        output_results['gt_labels'] = np.concatenate(
+            [r['gt_labels'] for r in mosaic_results], axis=0)
 
         output_results['img_shape'] = canvas_shape
         output_results['ori_shape'] = canvas_shape
+        output_results['flip'] = False
+        output_results['flip_direction'] = None
 
         return output_results
 
@@ -339,7 +351,7 @@ class MosaicPipeline(object):
 
 @PIPELINES.register_module()
 class HueSaturationValueJitter(object):
-    
+
     def __init__(self, hue_ratio=0.5, saturation_ratio=0.5, value_ratio=0.5):
         self.h_ratio = hue_ratio
         self.s_ratio = saturation_ratio
@@ -348,7 +360,9 @@ class HueSaturationValueJitter(object):
     def __call__(self, result):
         for key in result.get('img_fields', []):
             img = result[key]
-            r = np.random.uniform(-1, 1, 3) * [self.h_ratio, self.s_ratio, self.v_ratio] + 1  # random gains
+            # random gains
+            r = np.random.uniform(-1, 1, 3) * \
+                [self.h_ratio, self.s_ratio, self.v_ratio] + 1
             hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
             dtype = img.dtype  # uint8
 
@@ -357,10 +371,12 @@ class HueSaturationValueJitter(object):
             lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
             lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
 
-            img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
-            cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=result[key])  # no return needed
+            img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(
+                sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
+            cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR,
+                         dst=result[key])  # no return needed
         return result
-        
+
     def __repr__(self):
         repr_str = (f'{self.__class__.__name__}('
                     f'hue_ratio={self.h_ratio}, '

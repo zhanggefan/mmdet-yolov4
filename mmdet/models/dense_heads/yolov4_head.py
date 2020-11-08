@@ -334,6 +334,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
+        num_gts = torch.tensor([sum([g.shape[0] for g in gt_bboxes])], dtype=torch.float)
+
         with autocast(enabled=False):
 
             pred_maps = [p.float() for p in pred_maps]
@@ -388,6 +390,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             # l_conf=lobj * len(img_metas),
             loss_bbox=losses_bbox,
             # l_bbox=lbox * len(img_metas),
+            num_gts=num_gts
         )
 
     def loss_single_no_assigner(self,

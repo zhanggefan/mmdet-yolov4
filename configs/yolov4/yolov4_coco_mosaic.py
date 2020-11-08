@@ -10,10 +10,8 @@ train_pipeline = [
              dict(type='LoadImageFromFile'),
              dict(type='LoadAnnotations', with_bbox=True),
              dict(type='Resize', img_scale=(640, 640), keep_ratio=True),
-             dict(type='RandomFlip', flip_ratio=0.5)
          ],
          pad_val=114),
-    dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Albu',
          update_pad_shape=True,
          skip_img_without_anno=False,
@@ -43,7 +41,10 @@ train_pipeline = [
                  type='CenterCrop',
                  width=640,
                  height=640,
-                 always_apply=True)
+                 always_apply=True),
+             dict(
+                 type='HorizontalFlip',
+                 p=0.5)
          ]),
     dict(type='HueSaturationValueJitter',
          hue_ratio=0.015, 
@@ -130,7 +131,7 @@ test_cfg = dict(
     max_per_img=300)
 
 # optimizer
-optimizer = dict(type='SGD', lr=0.006, momentum=0.9, weight_decay=0.0005,
+optimizer = dict(type='SGD', lr=0.006, momentum=0.937, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0.))
 optimizer_config = dict(
@@ -145,24 +146,24 @@ lr_config = dict(
     min_lr_ratio=0.2,
 )
 
-custom_hooks = [
-    dict(
-        type='YoloV4WarmUpHook',
-        warmup_iters=10000,
-        lr_weight_warmup=0.,
-        lr_bias_warmup=0.1,
-        momentum_warmup=0.9,
-        priority='NORMAL'
-    ),
-    dict(
-        type='YOLOV4EMAHook',
-        momentum=0.9999,
-        interval=2,
-        warm_up=10000,
-        resume_from=None,
-        priority='HIGH'
-    )
-]
+# custom_hooks = [
+#     dict(
+#         type='YoloV4WarmUpHook',
+#         warmup_iters=10000,
+#         lr_weight_warmup=0.,
+#         lr_bias_warmup=0.1,
+#         momentum_warmup=0.9,
+#         priority='NORMAL'
+#     ),
+#     # dict(
+#     #     type='YOLOV4EMAHook',
+#     #     momentum=0.9999,
+#     #     interval=2,
+#     #     warm_up=10000,
+#     #     resume_from=None,
+#     #     priority='HIGH'
+#     # )
+# ]
 
 total_epochs = 300
 # fp16 = dict(loss_scale=512.)
