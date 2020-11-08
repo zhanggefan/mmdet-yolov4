@@ -25,7 +25,7 @@ train_pipeline = [
          transforms=[
              dict(
                  type='ShiftScaleRotate',
-                 shift_limit=(-0.25, 0.25),
+                 shift_limit=0.25,
                  scale_limit=0,
                  rotate_limit=0,
                  interpolation=1,
@@ -34,7 +34,7 @@ train_pipeline = [
                  always_apply=True),
              dict(
                  type='RandomScale',
-                 scale_limit=(0.5, -0.5),
+                 scale_limit=0.5,
                  interpolation=1,
                  always_apply=True),
              dict(

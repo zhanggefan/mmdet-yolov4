@@ -51,7 +51,7 @@ torch.backends.cudnn.benchmark = True
 cfg = Config.fromfile('configs/yolov4/yolov4_coco_mosaic.py')
 # cfg.data.workers_per_gpu = 0
 cfg.gpu_ids = range(1)
-cfg.seed = 0
+cfg.seed = None
 cfg.work_dir = 'work_dirs/yolov4/yolov4_20201101'
 
 model = YOLOV4(
@@ -61,10 +61,10 @@ model = YOLOV4(
     test_cfg=cfg.test_cfg,
     use_amp=True
 )
-model.init_weights()
+# model.init_weights()
 
-cfg.resume_from = 'work_dirs/yolov4/yolov4_20201101/epoch_40.pth'
-cfg.custom_hooks[-1].resume_from = cfg.resume_from
+# cfg.resume_from = 'work_dirs/yolov4/yolov4_20201101/epoch_45.pth'
+# cfg.custom_hooks[-1].resume_from = cfg.resume_from
 # model.load_state_dict(torch.load('work_dirs/yolov4/epoch_300.pth'), strict=False)
 # model.load_state_dict(torch.load('work_dirs/yolov4/epoch_320_yolo.pth'), strict=False)
 
@@ -83,6 +83,12 @@ cfg.custom_hooks[-1].resume_from = cfg.resume_from
 # dataset.evaluate(result)
 # testing -----------------------------------------------------------------
 
+mdl = torch.load('work_dirs/yolov4/yolov4_20201101/epoch_20.pth')['state_dict']
+# for i in mdl:
+#     iori = i.replace('_','.')[4:]
+#     if iori in mdl:
+#         mdl[iori] = mdl[i]
+model.load_state_dict(mdl, strict=False)
 
 # training ----------------------------------------------------------------
 dataset = build_dataset(cfg.data.train)
