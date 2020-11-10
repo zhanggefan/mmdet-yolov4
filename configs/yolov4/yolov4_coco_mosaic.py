@@ -1,4 +1,30 @@
-_base_ = ['../_base_/default_runtime.py']
+model = dict(
+    type='YOLOV4',
+    backbone=dict(
+        type='DarknetCSP',
+        scale='s5p',
+        out_indices=[3, 4, 5]),
+    neck=dict(
+        type='PACSPFPN',
+        in_channels=[128, 256, 512],
+        out_channels=[128, 256, 512],
+        csp_repetition=1),
+    bbox_head=dict(
+        type='YOLOV4Head',
+        num_classes=80,
+        in_channels=[128, 256, 512]
+    ),
+    use_amp=True
+)
+
+train_cfg = None
+
+test_cfg = dict(
+    min_bbox_size=0,
+    nms_pre=-1,
+    score_thr=0.001,
+    nms=dict(type='nms', iou_threshold=0.65),
+    max_per_img=300)
 
 dataset_type = 'CocoDataset'
 data_root = 'data/coco/'
@@ -20,7 +46,8 @@ train_pipeline = [
              format='pascal_voc',
              min_area=4,
              min_visibility=0.2,
-             label_fields=['gt_labels']
+             label_fields=['gt_labels'],
+             check_each_transform=False
          ),
          transforms=[
              dict(
@@ -47,9 +74,12 @@ train_pipeline = [
                  p=0.5)
          ]),
     dict(type='HueSaturationValueJitter',
-         hue_ratio=0.015, 
-         saturation_ratio=0.7, 
+         hue_ratio=0.015,
+         saturation_ratio=0.7,
          value_ratio=0.4),
+    dict(type='GtBBoxesFilter',
+         min_size=2,
+         max_aspect_ratio=20),
     dict(type='Normalize', **img_norm_cfg),
     dict(type='DefaultFormatBundle'),
     dict(type='Collect', keys=['img', 'gt_bboxes', 'gt_labels'])
@@ -72,7 +102,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=32,
-    workers_per_gpu=8,
+    workers_per_gpu=10,
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_train2017.json',
@@ -88,56 +118,16 @@ data = dict(
         ann_file=data_root + 'annotations/instances_val2017.json',
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
-log_config = dict(
-    interval=50,
-    hooks=[
-        dict(type='TextLoggerHook'),
-        # dict(type='TensorboardLoggerHook')
-    ])
-
-# data = dict(
-#     samples_per_gpu=32,
-#     workers_per_gpu=0,
-#     train=dict(
-#         type=dataset_type,
-#         ann_file=data_root + 'annotations/coco128.json',
-#         img_prefix=data_root + 'train2017/',
-#         pipeline=train_pipeline),
-#     val=dict(
-#         type=dataset_type,
-#         ann_file=data_root + 'annotations/coco128.json',
-#         img_prefix=data_root + 'train2017/',
-#         pipeline=test_pipeline),
-#     test=dict(
-#         type=dataset_type,
-#         ann_file=data_root + 'annotations/instances_val2017.json',
-#         img_prefix=data_root + 'val2017/',
-#         pipeline=test_pipeline))
-
-# log_config = dict(
-#     interval=4,
-#     hooks=[
-#         dict(type='TextLoggerHook'),
-#         # dict(type='TensorboardLoggerHook')
-#     ])
-
-evaluation = dict(interval=1, metric='bbox')
-
-test_cfg = dict(
-    min_bbox_size=0,
-    nms_pre=-1,
-    score_thr=0.001,
-    nms=dict(type='nms', iou_threshold=0.65),
-    max_per_img=300)
 
 # optimizer
-optimizer = dict(type='SGD', lr=0.006, momentum=0.937, weight_decay=0.0005,
+optimizer = dict(type='SGD', lr=0.01, momentum=0.937, weight_decay=0.0005,
                  nesterov=True,
                  paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0.))
+
 optimizer_config = dict(
     type='AMPGradAccumulateOptimizerHook',
     accumulation=2,
-    # grad_clip=dict(max_norm=35, norm_type=2),
+    grad_clip=dict(max_norm=35, norm_type=2),
 )
 
 # learning policy
@@ -146,26 +136,45 @@ lr_config = dict(
     min_lr_ratio=0.2,
 )
 
-# custom_hooks = [
-#     dict(
-#         type='YoloV4WarmUpHook',
-#         warmup_iters=10000,
-#         lr_weight_warmup=0.,
-#         lr_bias_warmup=0.1,
-#         momentum_warmup=0.9,
-#         priority='NORMAL'
-#     ),
-#     # dict(
-#     #     type='YOLOV4EMAHook',
-#     #     momentum=0.9999,
-#     #     interval=2,
-#     #     warm_up=10000,
-#     #     resume_from=None,
-#     #     priority='HIGH'
-#     # )
-# ]
+load_from = None
+resume_from = None
+
+custom_hooks = [
+    dict(
+        type='YoloV4WarmUpHook',
+        warmup_iters=10000,
+        lr_weight_warmup=0.,
+        lr_bias_warmup=0.1,
+        momentum_warmup=0.9,
+        priority='NORMAL'
+    ),
+    dict(
+        type='YOLOV4EMAHook',
+        momentum=0.9999,
+        interval=2,
+        warm_up=10000,
+        resume_from=resume_from,
+        priority='HIGH'
+    )
+]
 
 total_epochs = 300
-# fp16 = dict(loss_scale=512.)
+
+evaluation = dict(interval=1, metric='bbox')
 
 checkpoint_config = dict(interval=5)
+
+# yapf:disable
+log_config = dict(
+    interval=50,
+    hooks=[
+        dict(type='TextLoggerHook'),
+        # dict(type='TensorboardLoggerHook')
+    ])
+
+# yapf:enable
+dist_params = dict(backend='nccl')
+log_level = 'INFO'
+workflow = [('train', 1)]
+
+cudnn_benchmark = True

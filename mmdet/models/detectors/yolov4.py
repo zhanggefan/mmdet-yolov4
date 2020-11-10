@@ -13,6 +13,7 @@ import numpy as np
 import os.path as osp
 import random
 import cv2
+from mmcv.runner.dist_utils import master_only
 
 
 @DETECTORS.register_module()
@@ -213,6 +214,7 @@ class YOLOV4EMAHook(Hook):
         self.momentum = momentum
         self.checkpoint = resume_from
 
+    @master_only
     def before_run(self, runner):
         """To resume model with it's ema parameters more friendly.
 
@@ -232,6 +234,7 @@ class YOLOV4EMAHook(Hook):
         if self.checkpoint is not None:
             runner.resume(self.checkpoint)
 
+    @master_only
     def after_train_iter(self, runner):
         """Update ema parameter every self.interval iterations."""
         if (runner.iter + 1) % self.interval != 0:
@@ -245,16 +248,19 @@ class YOLOV4EMAHook(Hook):
                 buffer_parameter.mul_(momentum).add_(
                     1 - momentum, parameter.data)
 
+    @master_only
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the
         EvalHook."""
         self._swap_ema_parameters()
 
+    @master_only
     def before_train_epoch(self, runner):
         """We recover model's parameter from ema backup after last epoch's
         EvalHook."""
         self._swap_ema_parameters()
 
+    @master_only
     def _swap_ema_parameters(self):
         """Swap the parameter of model with parameter in ema_buffer."""
         for name, value in self.model_parameters.items():
@@ -357,11 +363,11 @@ class HueSaturationValueJitter(object):
         self.s_ratio = saturation_ratio
         self.v_ratio = value_ratio
 
-    def __call__(self, result):
-        for key in result.get('img_fields', []):
-            img = result[key]
+    def __call__(self, results):
+        for key in results.get('img_fields', []):
+            img = results[key]
             # random gains
-            r = np.random.uniform(-1, 1, 3) * \
+            r = np.array([random.uniform(-1., 1.) for _ in range(3)]) * \
                 [self.h_ratio, self.s_ratio, self.v_ratio] + 1
             hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
             dtype = img.dtype  # uint8
@@ -374,12 +380,38 @@ class HueSaturationValueJitter(object):
             img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(
                 sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
             cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR,
-                         dst=result[key])  # no return needed
-        return result
+                         dst=results[key])  # no return needed
+        return results
 
     def __repr__(self):
         repr_str = (f'{self.__class__.__name__}('
                     f'hue_ratio={self.h_ratio}, '
                     f'saturation_ratio={self.s_ratio}, '
                     f'value_ratio={self.v_ratio})')
+        return repr_str
+
+
+@PIPELINES.register_module()
+class GtBBoxesFilter(object):
+    def __init__(self, min_size=2, max_aspect_ratio=20):
+        assert max_aspect_ratio > 1
+        self.min_size = min_size
+        self.max_aspect_ratio = max_aspect_ratio
+
+    def __call__(self, results):
+        bboxes = results['gt_bboxes']
+        labels = results['gt_labels']
+        w = bboxes[:, 2] - bboxes[:, 0]
+        h = bboxes[:, 3] - bboxes[:, 1]
+        ar = np.maximum(w / (h + 1e-16), h / (w + 1e-16))
+        valid = (w > self.min_size) & (
+                h > self.min_size) & (ar < self.max_aspect_ratio)
+        results['gt_bboxes'] = bboxes[valid]
+        results['gt_labels'] = labels[valid]
+        return results
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'min_size={self.min_size}, '
+                    f'max_aspect_ratio={self.max_aspect_ratio})')
         return repr_str
