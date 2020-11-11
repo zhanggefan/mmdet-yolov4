@@ -2,17 +2,17 @@ model = dict(
     type='YOLOV4',
     backbone=dict(
         type='DarknetCSP',
-        scale='s5p',
+        scale='x5p',
         out_indices=[3, 4, 5]),
     neck=dict(
         type='PACSPFPN',
-        in_channels=[128, 256, 512],
-        out_channels=[128, 256, 512],
-        csp_repetition=1),
+        in_channels=[320, 640, 1280],
+        out_channels=[320, 640, 1280],
+        csp_repetition=3),
     bbox_head=dict(
         type='YOLOV4Head',
         num_classes=80,
-        in_channels=[128, 256, 512]
+        in_channels=[320, 640, 1280]
     ),
     use_amp=True
 )
@@ -101,8 +101,8 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=32,
-    workers_per_gpu=10,
+    samples_per_gpu=4,
+    workers_per_gpu=6,
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_train2017.json',
