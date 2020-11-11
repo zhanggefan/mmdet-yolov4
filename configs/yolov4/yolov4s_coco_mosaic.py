@@ -121,7 +121,8 @@ data = dict(
 
 nominal_batch_size = 64
 gpus = 1
-accumulate_interval = nominal_batch_size / data['samples_per_gpu'] / gpus
+from math import ceil
+accumulate_interval = ceil(nominal_batch_size // (data['samples_per_gpu'] * gpus))
 
 # optimizer
 optimizer = dict(type='SGD', lr=0.01, momentum=0.937, weight_decay=0.0005,
