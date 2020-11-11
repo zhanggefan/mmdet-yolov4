@@ -119,6 +119,10 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 
+nominal_batch_size = 64
+gpus = 1
+accumulate_interval = nominal_batch_size / data['samples_per_gpu'] / gpus
+
 # optimizer
 optimizer = dict(type='SGD', lr=0.01, momentum=0.937, weight_decay=0.0005,
                  nesterov=True,
@@ -126,7 +130,7 @@ optimizer = dict(type='SGD', lr=0.01, momentum=0.937, weight_decay=0.0005,
 
 optimizer_config = dict(
     type='AMPGradAccumulateOptimizerHook',
-    accumulation=2,
+    accumulation=accumulate_interval,
     grad_clip=dict(max_norm=35, norm_type=2),
 )
 
@@ -151,8 +155,8 @@ custom_hooks = [
     dict(
         type='YOLOV4EMAHook',
         momentum=0.9999,
-        interval=2,
-        warm_up=10000,
+        interval=accumulate_interval,
+        warm_up=10000 * accumulate_interval,
         resume_from=resume_from,
         priority='HIGH'
     )
