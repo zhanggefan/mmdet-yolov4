@@ -246,7 +246,7 @@ class YOLOV4EMAHook(Hook):
                 buffer_name = self.param_ema_buffer[name]
                 buffer_parameter = self.model_buffers[buffer_name]
                 buffer_parameter.mul_(momentum).add_(
-                    1 - momentum, parameter.data)
+                    parameter.data, alpha=1 - momentum)
 
     @master_only
     def after_train_epoch(self, runner):
