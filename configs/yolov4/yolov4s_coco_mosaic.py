@@ -29,7 +29,7 @@ test_cfg = dict(
 dataset_type = 'CocoDataset'
 data_root = 'data/coco/'
 img_norm_cfg = dict(
-    mean=[0, 0, 0], std=[255, 255, 255], to_rgb=True)
+    mean=[114, 114, 114], std=[255, 255, 255], to_rgb=True)
 train_pipeline = [
     dict(type='MosaicPipeline',
          individual_pipeline=[
@@ -50,15 +50,16 @@ train_pipeline = [
              check_each_transform=False
          ),
          transforms=[
-             dict(
-                 type='ShiftScaleRotate',
-                 shift_limit=0.25,
-                 scale_limit=0,
-                 rotate_limit=0,
-                 interpolation=1,
-                 border_mode=0,
-                 value=(114, 114, 114),
-                 always_apply=True),
+             dict(type='PadIfNeeded',
+                  min_height=1920,
+                  min_width=1920,
+                  border_mode=0,
+                  value=(114, 114, 114),
+                  always_apply=True),
+             dict(type='RandomCrop',
+                  width=1280,
+                  height=1280,
+                  always_apply=True),
              dict(
                  type='RandomScale',
                  scale_limit=0.5,
@@ -93,7 +94,7 @@ test_pipeline = [
         transforms=[
             dict(type='Resize', keep_ratio=True),
             dict(type='RandomFlip'),
-            dict(type='Pad', size_divisor=32, pad_val=(114, 114, 114)),
+            dict(type='Pad', size_divisor=32),
             dict(type='Normalize', **img_norm_cfg),
             dict(type='ImageToTensor', keys=['img']),
             dict(type='Collect', keys=['img']),
@@ -121,8 +122,7 @@ data = dict(
 
 nominal_batch_size = 64
 gpus = 1
-from math import ceil
-accumulate_interval = ceil(nominal_batch_size // (data['samples_per_gpu'] * gpus))
+accumulate_interval = round(nominal_batch_size / (data['samples_per_gpu'] * gpus))
 
 # optimizer
 optimizer = dict(type='SGD', lr=0.01, momentum=0.937, weight_decay=0.0005,
@@ -167,7 +167,8 @@ total_epochs = 300
 
 evaluation = dict(interval=1, metric='bbox')
 
-checkpoint_config = dict(interval=5)
+checkpoint_config = dict(interval=5,
+                         max_keep_ckpts=5)
 
 # yapf:disable
 log_config = dict(
