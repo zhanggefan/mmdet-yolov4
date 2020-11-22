@@ -224,7 +224,7 @@ class YOLOV4EMAHook(Hook):
         if is_module_wrapper(model):
             model = model.module
         self.param_ema_buffer = {}
-        self.model_parameters = dict(model.named_parameters(recurse=True))
+        self.model_parameters = model.state_dict()
         for name, value in self.model_parameters.items():
             # "." is not allowed in module's buffer name
             buffer_name = f"ema_{name.replace('.', '_')}"
@@ -242,11 +242,13 @@ class YOLOV4EMAHook(Hook):
         for name, parameter in self.model_parameters.items():
             momentum = self.momentum * \
                        (1 - math.exp(-runner.iter / self.warm_up))
+            buffer_name = self.param_ema_buffer[name]
             if parameter.dtype.is_floating_point:
-                buffer_name = self.param_ema_buffer[name]
                 buffer_parameter = self.model_buffers[buffer_name]
                 buffer_parameter.mul_(momentum).add_(
                     1 - momentum, parameter.data)
+            else:
+                self.model_buffers[buffer_name] = parameter.data
 
     @master_only
     def after_train_epoch(self, runner):
