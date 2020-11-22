@@ -246,7 +246,7 @@ class YOLOV4EMAHook(Hook):
             if parameter.dtype.is_floating_point:
                 buffer_parameter = self.model_buffers[buffer_name]
                 buffer_parameter.mul_(momentum).add_(
-                    1 - momentum, parameter.data)
+                    parameter.data, alpha=1 - momentum)
             else:
                 self.model_buffers[buffer_name] = parameter.data
 
