@@ -53,6 +53,8 @@ class TrafficSignDataset(CustomDataset):
                         bbox = bbox_info[4:]
                         bbox = [*map(lambda x: float(x), bbox)]
                         x, y, w, h = bbox
+                        if w <= 0 or h <= 0:
+                            continue
                         bbox = [x, y, x + w, y + h]
 
                         difficulty = 0
