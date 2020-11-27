@@ -72,6 +72,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                  loss_bbox=dict(
                      type='GIoULoss',
                      loss_weight=0.05),
+                 class_agnostic=False,
                  train_cfg=None,
                  test_cfg=None):
         super(YOLOV4Head, self).__init__()
@@ -110,7 +111,10 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.anchor_generator = build_anchor_generator(anchor_generator)
 
-        self.loss_cls = build_loss(loss_cls)
+        self.class_agnostic = class_agnostic
+
+        if not self.class_agnostic:
+            self.loss_cls = build_loss(loss_cls)
         self.loss_conf = build_loss(loss_conf)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_bbox_weight = self.loss_bbox.loss_weight
@@ -129,7 +133,10 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         """int: number of attributes in pred_map, bboxes (4) +
         objectness (1) + num_classes"""
 
-        return 5 + self.num_classes
+        if not self.class_agnostic:
+            return 5 + self.num_classes
+        else:
+            return 5
 
     def _init_layers(self):
         self.convs_pred = nn.ModuleList()
@@ -145,8 +152,9 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         for m, stride in zip(self.convs_pred, self.featmap_strides):
             b = m.bias.view(-1, self.num_attrib)  # conv.bias(255) to (3,85)
             b[:, 4] += math.log(8 / (640 / stride) ** 2)  # obj (8 objects per 640 image)
-            b[:, 5:] += math.log(0.6 / (self.num_classes - 0.99)) if class_frequency is None else torch.log(
-                class_frequency / class_frequency.sum())  # cls
+            if not self.class_agnostic:
+                b[:, 5:] += math.log(0.6 / (self.num_classes - 0.99)) if class_frequency is None else torch.log(
+                    class_frequency / class_frequency.sum())  # cls
             m.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def forward(self, feats):
@@ -215,7 +223,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 # activation
                 lvl_pred_maps = lvl_pred_maps.sigmoid()
                 # class score
-                mlvl_score_pred.append(lvl_pred_maps[:, :, 5:])
+                if not self.class_agnostic:
+                    mlvl_score_pred.append(lvl_pred_maps[:, :, 5:])
                 # conf score
                 mlvl_conf_pred.append(lvl_pred_maps[:, :, 4])
                 # bbox transform
@@ -230,7 +239,10 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 lvl_bbox_pred = lvl_bbox_pred.reshape((num_image, -1, 4))
                 mlvl_bbox_pred.append(lvl_bbox_pred)
 
-            mimg_score_pred = [score for score in torch.cat(mlvl_score_pred, dim=1)]
+            if not self.class_agnostic:
+                mimg_score_pred = [score for score in torch.cat(mlvl_score_pred, dim=1)]
+            else:
+                mimg_score_pred = None
             mimg_conf_pred = [conf for conf in torch.cat(mlvl_conf_pred, dim=1)]
             mimg_bbox_pred = [bbox for bbox in torch.cat(mlvl_bbox_pred, dim=1)]
 
@@ -238,8 +250,14 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
             for img_id in range(len(img_metas)):
                 scale_factor = img_metas[img_id]['scale_factor']
-                proposals = self._get_bboxes_single(mimg_score_pred[img_id], mimg_conf_pred[img_id],
-                                                    mimg_bbox_pred[img_id], scale_factor, cfg, rescale, with_nms)
+                proposals = self._get_bboxes_single(
+                    cls_pred=mimg_score_pred[img_id] if mimg_score_pred is not None else None,
+                    conf_pred=mimg_conf_pred[img_id],
+                    bbox_pred=mimg_bbox_pred[img_id],
+                    scale_factor=scale_factor,
+                    cfg=cfg,
+                    rescale=rescale,
+                    with_nms=with_nms)
                 result_list.append(proposals)
         return result_list
 
@@ -279,13 +297,18 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         # Get top-k prediction
         nms_pre = cfg.get('nms_pre', -1)
+
         if 0 < nms_pre < conf_pred.size(0):
             _, topk_inds = conf_pred.topk(nms_pre)
             bbox_pred = bbox_pred[topk_inds, :]
-            cls_pred = cls_pred[topk_inds, :]
+            if not self.class_agnostic:
+                cls_pred = cls_pred[topk_inds, :]
             conf_pred = conf_pred[topk_inds]
 
-        cls_pred *= conf_pred[:, None]
+        if not self.class_agnostic:
+            cls_pred *= conf_pred[:, None]
+        else:
+            cls_pred = conf_pred[:, None]
 
         if with_nms and (cls_pred.size(0) == 0):
             return torch.zeros((0, 5)), torch.zeros((0,))
@@ -382,16 +405,25 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                            zip(losses_conf, self.conf_level_balance_weight)]
 
             # lcls, lbox, lobj = compute_loss(pred_maps, img_metas, gt_bboxes, gt_labels)
-
-        return dict(
-            loss_cls=losses_cls,
-            # l_cls=lcls * len(img_metas),
-            loss_conf=losses_conf,
-            # l_conf=lobj * len(img_metas),
-            loss_bbox=losses_bbox,
-            # l_bbox=lbox * len(img_metas),
-            num_gts=num_gts
-        )
+        if not self.class_agnostic:
+            return dict(
+                loss_cls=losses_cls,
+                # l_cls=lcls * len(img_metas),
+                loss_conf=losses_conf,
+                # l_conf=lobj * len(img_metas),
+                loss_bbox=losses_bbox,
+                # l_bbox=lbox * len(img_metas),
+                num_gts=num_gts
+            )
+        else:
+            return dict(
+                # l_cls=lcls * len(img_metas),
+                loss_conf=losses_conf,
+                # l_conf=lobj * len(img_metas),
+                loss_bbox=losses_bbox,
+                # l_bbox=lbox * len(img_metas),
+                num_gts=num_gts
+            )
 
     def loss_single_no_assigner(self,
                                 pred_map,
@@ -451,7 +483,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             pred_cls = pred_map_pos[..., 5:]
             target_cls = target_labels
 
-            loss_cls += self.loss_cls(pred_cls, target_cls)
+            if not self.class_agnostic:
+                loss_cls += self.loss_cls(pred_cls, target_cls)
 
             target_conf[pos_indices] = (1 - self.conf_iou_loss_ratio) + self.conf_iou_loss_ratio * (
                     1 - giou_loss).detach().clamp(0.0, 1.0).type(target_conf.dtype)
@@ -525,7 +558,6 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
             list[ndarray]: bbox results of each class
         """
         return self.aug_test_bboxes(feats, img_metas, rescale=rescale)
-
 
 # # following code are moved here for comparison only
 
