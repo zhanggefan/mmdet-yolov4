@@ -17,7 +17,7 @@ model = dict(
     use_amp=True
 )
 
-train_cfg = None
+train_cfg = dict()
 
 test_cfg = dict(
     min_bbox_size=0,
@@ -103,7 +103,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=32,
-    workers_per_gpu=6,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_train2017.json',

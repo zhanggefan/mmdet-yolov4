@@ -14,7 +14,7 @@ class TencentImageSplitTool(object):
                  out_root,
                  tile_overlap,
                  tile_shape,
-                 num_process=16,
+                 num_process=8,
                  ):
         self.in_images_dir = osp.join(in_root, 'img/')
         self.in_labels_dir = osp.join(in_root, 'label/')

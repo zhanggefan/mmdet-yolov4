@@ -17,7 +17,7 @@ model = dict(
     use_amp=True
 )
 
-train_cfg = None
+train_cfg = dict()
 
 test_cfg = dict(
     min_bbox_size=0,
@@ -141,8 +141,8 @@ lr_config = dict(
     min_lr_ratio=0.2,
 )
 
-load_from = None
-resume_from = None
+load_from = "work_dirs/tencent_traffic_sign_yolov4l/latest.pth"
+resume_from = "work_dirs/tencent_traffic_sign_yolov4l/latest.pth"
 
 custom_hooks = [
     dict(

@@ -20,6 +20,32 @@ import math
 from torch.cuda.amp import autocast
 
 
+class SoftFocalLoss(nn.Module):
+    # Wraps focal loss around existing loss_fcn(), i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)
+    def __init__(self, loss_fcn, gamma=1.5, alpha=0.25):
+        super(SoftFocalLoss, self).__init__()
+        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = loss_fcn.reduction
+        self.loss_fcn.reduction = 'none'  # required to apply FL to each element
+
+    def forward(self, pred, gt, reduction_override=None):
+        loss = self.loss_fcn(pred, gt)
+        # p_t = torch.exp(-loss)
+        # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
+
+        # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
+        pred_prob = torch.sigmoid(pred)  # prob from logits
+        p_t = gt * pred_prob + (1 - gt) * (1 - pred_prob)
+        alpha_factor = gt * self.alpha + (1 - gt) * (1 - self.alpha)
+        modulating_factor = (1.0 - p_t) ** self.gamma
+        loss *= alpha_factor * modulating_factor
+
+        reduction = reduction_override if reduction_override is not None else self.reduction
+        return reduce_loss(loss, reduction=reduction)
+
+
 @HEADS.register_module()
 class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
     """YOLOV3Head Paper link: https://arxiv.org/abs/1804.02767.
@@ -85,9 +111,12 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.assigner = None
+        self.sampler = None
         self.shape_match_thres = 4.
         self.conf_iou_loss_ratio = 1.
         self.conf_level_balance_weight = [4.0, 1.0, 0.4, 0.1, 0.1]
+        self.class_fre = None
+        self.num_obj_avg = 8
         if self.train_cfg:
             if hasattr(self.train_cfg, 'assigner'):
                 self.assigner = build_assigner(self.train_cfg.assigner)
@@ -99,9 +128,15 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 self.conf_iou_loss_ratio = self.train_cfg.conf_iou_loss_ratio
             if hasattr(self.train_cfg, 'conf_level_balance_weight'):
                 self.conf_level_balance_weight = self.train_cfg.conf_level_balance_weight
-            self.sampler = build_sampler(sampler_cfg, context=self)
-            self.shape_match_thres = self.train_cfg.get('shape_match_thres', 4.)
+            if hasattr(self.train_cfg, 'class_frequency'):
+                self.class_freq = self.train_cfg.class_frequency
+            if hasattr(self.train_cfg, 'num_obj_per_image'):
+                self.num_obj_avg = self.train_cfg.num_obj_per_image
+            if hasattr(self.train_cfg, 'shape_match_thres'):
+                self.shape_match_thres = self.train_cfg.shape_match_thres
 
+        self.sampler = build_sampler(sampler_cfg, context=self)
+        
         self.one_hot_smoother = one_hot_smoother
 
         self.conv_cfg = conv_cfg
@@ -115,7 +150,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         if not self.class_agnostic:
             self.loss_cls = build_loss(loss_cls)
-        self.loss_conf = build_loss(loss_conf)
+        self.loss_conf = SoftFocalLoss(build_loss(loss_conf))
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_bbox_weight = self.loss_bbox.loss_weight
         self.loss_bbox.loss_weight = 1.
@@ -145,16 +180,16 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                                   self.num_anchors[i] * self.num_attrib, 1)
             self.convs_pred.append(conv_pred)
 
-    def init_weights(self, class_frequency=None):
+    def init_weights(self):
         """Initialize weights of the head."""
         for m in self.convs_pred:
             normal_init(m, std=0.01)
         for m, stride in zip(self.convs_pred, self.featmap_strides):
             b = m.bias.view(-1, self.num_attrib)  # conv.bias(255) to (3,85)
-            b[:, 4] += math.log(8 / (640 / stride) ** 2)  # obj (8 objects per 640 image)
+            b[:, 4] += math.log(self.num_obj_avg / (640 / stride) ** 2)  # obj (8 objects per 640 image)
             if not self.class_agnostic:
-                b[:, 5:] += math.log(0.6 / (self.num_classes - 0.99)) if class_frequency is None else torch.log(
-                    class_frequency / class_frequency.sum())  # cls
+                b[:, 5:] += math.log(0.6 / (self.num_classes - 0.99)) if self.class_freq is None else torch.log(
+                    self.class_freq / self.class_freq.sum())  # cls
             m.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def forward(self, feats):
@@ -389,7 +424,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 #         featmap_sizes, img_meta['pad_shape'], device)
                 #     valid_flag_list.append(multi_level_flags)
 
-                losses_cls, losses_conf, losses_bbox = multi_apply(
+                losses_cls, losses_conf, losses_bbox, pgp, pgn, lp, ln = multi_apply(
                     self.loss_single_no_assigner,
                     pred_maps,
                     mlvl_anchors,
@@ -403,6 +438,15 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
             losses_conf = [loss_conf * balance for loss_conf, balance in
                            zip(losses_conf, self.conf_level_balance_weight)]
+
+            pgp = [l * balance for l, balance in
+                           zip(pgp, self.conf_level_balance_weight)]
+            pgn = [l * balance for l, balance in
+                           zip(pgn, self.conf_level_balance_weight)]
+            lp = [l * balance for l, balance in
+                           zip(lp, self.conf_level_balance_weight)]
+            ln = [l * balance for l, balance in
+                           zip(ln, self.conf_level_balance_weight)]
 
             # lcls, lbox, lobj = compute_loss(pred_maps, img_metas, gt_bboxes, gt_labels)
         if not self.class_agnostic:
@@ -422,7 +466,8 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 # l_conf=lobj * len(img_metas),
                 loss_bbox=losses_bbox,
                 # l_bbox=lbox * len(img_metas),
-                num_gts=num_gts
+                num_gts=num_gts,
+                pgp=pgp, pgn=pgn, lp=lp, ln=ln
             )
 
     def loss_single_no_assigner(self,
@@ -491,7 +536,25 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         loss_conf = self.loss_conf(pred_conf, target_conf)
 
-        return loss_cls * num_imgs, loss_conf * num_imgs, loss_bbox * self.loss_bbox_weight * num_imgs
+        pred_conf_d = pred_conf.clone().detach()
+        pred_conf_d.requires_grad = True
+        target_conf_d = target_conf.clone().detach()
+        loss_conf_all = self.loss_conf(pred_conf_d, target_conf_d, reduction_override='none')
+        loss_conf_sum = loss_conf_all.sum()
+        loss_conf_sum.backward()
+        pred_grad = pred_conf_d.grad
+        pred_grad_pos = pred_grad[pos_indices].sum()
+        pred_grad_neg = pred_grad.sum() - pred_grad_pos
+        loss_conf_p = loss_conf_all[pos_indices].sum()
+        loss_conf_n = loss_conf_sum - loss_conf_p
+
+        return (loss_cls * num_imgs, 
+                loss_conf * num_imgs,
+                loss_bbox * self.loss_bbox_weight * num_imgs, 
+                pred_grad_pos * num_imgs,
+                pred_grad_neg * num_imgs,
+                loss_conf_p * num_imgs,
+                loss_conf_n * num_imgs)
 
     def get_targets_no_assigner(self,
                                 responsible_indices_list,

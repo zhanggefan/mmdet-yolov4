@@ -12,7 +12,7 @@ model = dict(
         type='PACSPFPN',
         in_channels=[64, 128, 256, 512],
         out_channels=[64, 128, 256, 512],
-        csp_repetition=1),
+        csp_repetition=2),
     bbox_head=dict(
         type='YOLOV4Head',
         anchor_generator=dict(
@@ -33,6 +33,15 @@ model = dict(
     ),
     use_amp=True
 )
+
+train_cfg = dict(num_obj_per_image=3,
+                 conf_level_balance_weight=[4.0, 4.0, 1.0, 0.4])
+test_cfg = dict(
+    min_bbox_size=0,
+    nms_pre=-1,
+    score_thr=0.3,
+    nms=dict(type='nms', iou_threshold=0.1),
+    max_per_img=300)
 
 dataset_type = 'TrafficSignDataset'
 data_root = 'data/tencent/det/'
@@ -98,7 +107,7 @@ test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
         type='MultiScaleFlipAug',
-        img_scale=(640, 640),
+        img_scale=(1440, 816),
         flip=False,
         transforms=[
             dict(type='Resize', keep_ratio=True),
@@ -111,7 +120,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=8,
+    samples_per_gpu=24,
     workers_per_gpu=4,
     train=dict(
         type=dataset_type,
@@ -120,11 +129,18 @@ data = dict(
         pipeline=train_pipeline),
     val=dict(
         type=dataset_type,
-        ann_file=data_root + 'valsplit/label/',
-        img_prefix=data_root + 'valsplit/img/',
+        ann_file=data_root + 'val/label/',
+        img_prefix=data_root + 'val/img/',
         pipeline=test_pipeline),
     test=dict(
         type=dataset_type,
-        ann_file=data_root + 'valsplit/label/',
-        img_prefix=data_root + 'valsplit/img/',
+        ann_file=data_root + 'val/label/',
+        img_prefix=data_root + 'val/img/',
         pipeline=test_pipeline))
+
+checkpoint_config = dict(interval=2,
+                         max_keep_ckpts=40)
+
+evaluation = dict(interval=2, metric='mAP')
+
+total_epochs = 100
