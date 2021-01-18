@@ -147,6 +147,7 @@ If you take a look at the dataset, you will find the dataset format is as below:
     'name': 'polygon'}}},
  'size': 1115004}
 ```
+
 The annotation is a JSON file where each key indicates an image's all annotations.
 The code to convert the ballon dataset into coco format is as below.
 
@@ -206,7 +207,6 @@ def convert_balloon_to_coco(ann_file, out_file, image_prefix):
 
 Using the function above, users can successfully convert the annotation file into json format, then we can use `CocoDataset` to train and evaluate the model.
 
-
 ## Prepare a config
 
 The second step is to prepare a config thus the dataset could be successfully loaded. Assume that we want to use Mask R-CNN with FPN, the config to train the detector on ballon dataset is as below. Assume the config is under directory `configs/ballon/` and named as `mask_rcnn_r50_caffe_fpn_mstrain-poly_1x_balloon.py`, the config is as below.
@@ -228,11 +228,11 @@ data = dict(
     train=dict(
         img_prefix='balloon/train/',
         classes=classes,
-        ann_file='balloon/train/annotation_coco.json')
+        ann_file='balloon/train/annotation_coco.json'),
     val=dict(
         img_prefix='balloon/val/',
         classes=classes,
-        ann_file='balloon/val/annotation_coco.json')
+        ann_file='balloon/val/annotation_coco.json'),
     test=dict(
         img_prefix='balloon/val/',
         classes=classes,
