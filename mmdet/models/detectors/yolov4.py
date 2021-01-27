@@ -214,7 +214,6 @@ class YOLOV4EMAHook(Hook):
         self.momentum = momentum
         self.checkpoint = resume_from
 
-    @master_only
     def before_run(self, runner):
         """To resume model with it's ema parameters more friendly.
 
@@ -234,7 +233,6 @@ class YOLOV4EMAHook(Hook):
         if self.checkpoint is not None:
             runner.resume(self.checkpoint)
 
-    @master_only
     def after_train_iter(self, runner):
         """Update ema parameter every self.interval iterations."""
         if (runner.iter + 1) % self.interval != 0:
@@ -250,19 +248,16 @@ class YOLOV4EMAHook(Hook):
             else:
                 self.model_buffers[buffer_name] = parameter.data
 
-    @master_only
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the
         EvalHook."""
         self._swap_ema_parameters()
 
-    @master_only
     def before_train_epoch(self, runner):
         """We recover model's parameter from ema backup after last epoch's
         EvalHook."""
         self._swap_ema_parameters()
 
-    @master_only
     def _swap_ema_parameters(self):
         """Swap the parameter of model with parameter in ema_buffer."""
         for name, value in self.model_parameters.items():
