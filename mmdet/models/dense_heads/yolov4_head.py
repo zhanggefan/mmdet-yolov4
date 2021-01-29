@@ -148,7 +148,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         if not self.class_agnostic:
             self.loss_cls = build_loss(loss_cls)
-        self.loss_conf = SoftFocalLoss(build_loss(loss_conf))
+        self.loss_conf = build_loss(loss_conf)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_bbox_weight = self.loss_bbox.loss_weight
         self.loss_bbox.loss_weight = 1.
@@ -422,7 +422,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 #         featmap_sizes, img_meta['pad_shape'], device)
                 #     valid_flag_list.append(multi_level_flags)
 
-                losses_cls, losses_conf, losses_bbox, pgp, pgn, lp, ln = multi_apply(
+                losses_cls, losses_conf, losses_bbox = multi_apply(
                     self.loss_single_no_assigner,
                     pred_maps,
                     mlvl_anchors,
@@ -436,15 +436,6 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
             losses_conf = [loss_conf * balance for loss_conf, balance in
                            zip(losses_conf, self.conf_level_balance_weight)]
-
-            pgp = [l * balance for l, balance in
-                           zip(pgp, self.conf_level_balance_weight)]
-            pgn = [l * balance for l, balance in
-                           zip(pgn, self.conf_level_balance_weight)]
-            lp = [l * balance for l, balance in
-                           zip(lp, self.conf_level_balance_weight)]
-            ln = [l * balance for l, balance in
-                           zip(ln, self.conf_level_balance_weight)]
 
             # lcls, lbox, lobj = compute_loss(pred_maps, img_metas, gt_bboxes, gt_labels)
         if not self.class_agnostic:
@@ -464,8 +455,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 # l_conf=lobj * len(img_metas),
                 loss_bbox=losses_bbox,
                 # l_bbox=lbox * len(img_metas),
-                num_gts=num_gts,
-                pgp=pgp, pgn=pgn, lp=lp, ln=ln
+                num_gts=num_gts
             )
 
     def loss_single_no_assigner(self,
@@ -534,25 +524,7 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
 
         loss_conf = self.loss_conf(pred_conf, target_conf)
 
-        pred_conf_d = pred_conf.clone().detach()
-        pred_conf_d.requires_grad = True
-        target_conf_d = target_conf.clone().detach()
-        loss_conf_all = self.loss_conf(pred_conf_d, target_conf_d, reduction_override='none')
-        loss_conf_sum = loss_conf_all.sum()
-        loss_conf_sum.backward()
-        pred_grad = pred_conf_d.grad
-        pred_grad_pos = pred_grad[pos_indices].sum()
-        pred_grad_neg = pred_grad.sum() - pred_grad_pos
-        loss_conf_p = loss_conf_all[pos_indices].sum()
-        loss_conf_n = loss_conf_sum - loss_conf_p
-
-        return (loss_cls * num_imgs, 
-                loss_conf * num_imgs,
-                loss_bbox * self.loss_bbox_weight * num_imgs, 
-                pred_grad_pos * num_imgs,
-                pred_grad_neg * num_imgs,
-                loss_conf_p * num_imgs,
-                loss_conf_n * num_imgs)
+        return loss_cls * num_imgs, loss_conf * num_imgs, loss_bbox * self.loss_bbox_weight * num_imgs
 
     def get_targets_no_assigner(self,
                                 responsible_indices_list,

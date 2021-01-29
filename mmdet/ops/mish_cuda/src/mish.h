@@ -4,7 +4,7 @@
 #ifdef __CUDACC__
 #include <c10/util/Half.h>
 #include <cuda_runtime.h>
-#define GLOBAL_INLINE __forceinline__
+#define GLOBAL_INLINE __forceinline__ __host__ __device__
 #else
 #include <cmath>
 #define GLOBAL_INLINE __inline__

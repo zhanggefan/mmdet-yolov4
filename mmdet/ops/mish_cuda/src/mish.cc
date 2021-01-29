@@ -12,10 +12,9 @@ void mish_kernel(torch::TensorIterator &iter);
 void mish_backward_kernel(torch::TensorIterator &iter);
 } // namespace mish_cpu_kernel
 
-torch::Tensor mish_forward(const torch::Tensor &input,
-                           const torch::optional<torch::Tensor> output) {
-  auto o = output.value_or(torch::empty_like(input));
-  auto iter = torch::TensorIterator::unary_op(o, input);
+torch::Tensor mish_forward(const torch::Tensor &input) {
+  auto output = torch::empty_like(input);
+  auto iter = torch::TensorIterator::unary_op(output, input);
   switch (iter.device_type()) {
   case torch::kCUDA:
     mish_cuda_kernel::mish_kernel(iter);
@@ -28,12 +27,12 @@ torch::Tensor mish_forward(const torch::Tensor &input,
                 "Unsupported device type, should be CPU or CUDA but got ",
                 input.device().type());
   }
-  return o;
+  return output;
 }
 
 torch::Tensor mish_backward(const torch::Tensor &grad_out,
                             const torch::Tensor &input) {
-  torch::Tensor grad_inp;
+  torch::Tensor grad_inp = torch::empty_like(input);;
   auto iter = torch::TensorIterator::binary_op(grad_inp, grad_out, input);
   switch (iter.device_type()) {
   case torch::kCUDA:
@@ -51,8 +50,7 @@ torch::Tensor mish_backward(const torch::Tensor &grad_out,
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("mish_forward", &mish_forward, "Mish activation forward", "input"_a,
-        "output"_a = nullptr);
+  m.def("mish_forward", &mish_forward, "Mish activation forward", "input"_a);
   m.def("mish_backward", &mish_backward, "Mish activation backward",
         "grad_out"_a, "input"_a);
 }
