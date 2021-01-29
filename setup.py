@@ -22,15 +22,21 @@ def get_version():
     return locals()['__version__']
 
 
-def make_cuda_ext(name, module, sources, sources_cuda=[]):
+def make_cuda_ext(name,
+                  module,
+                  sources,
+                  sources_cuda=[],
+                  extra_cpu_args=[],
+                  extra_cuda_args=[],
+                  extra_include_path=[]):
 
     define_macros = []
-    extra_compile_args = {'cxx': []}
+    extra_compile_args = {'cxx': [] + extra_cpu_args}
 
     if torch.cuda.is_available() or os.getenv('FORCE_CUDA', '0') == '1':
         define_macros += [('WITH_CUDA', None)]
         extension = CUDAExtension
-        extra_compile_args['nvcc'] = [
+        extra_compile_args['nvcc'] = extra_cuda_args + [
             '-D__CUDA_NO_HALF_OPERATORS__',
             '-D__CUDA_NO_HALF_CONVERSIONS__',
             '-D__CUDA_NO_HALF2_OPERATORS__',
@@ -43,6 +49,7 @@ def make_cuda_ext(name, module, sources, sources_cuda=[]):
     return extension(
         name=f'{module}.{name}',
         sources=[os.path.join(*module.split('.'), p) for p in sources],
+        include_dirs=extra_include_path,
         define_macros=define_macros,
         extra_compile_args=extra_compile_args)
 
@@ -156,6 +163,24 @@ if __name__ == '__main__':
             'build': parse_requirements('requirements/build.txt'),
             'optional': parse_requirements('requirements/optional.txt'),
         },
-        ext_modules=[],
+        ext_modules=[
+            make_cuda_ext(
+                name='mish_cuda_ext',
+                module='mmdet.ops.mish_cuda',
+                extra_include_path=[
+                    # PyTorch 1.5 uses ninjia, which requires absolute path
+                    # of included files, relative path will cause failure.
+                    os.path.abspath(
+                        os.path.join(*'mmdet.ops.mish_cuda'.split('.'),
+                                     'src/include/'))
+                ],
+                sources=[
+                    'src/kernel/mish_cpu.cc',
+                    'src/kernel/mish_cuda.cu',
+                    'src/mish.cc'
+                ],
+                extra_cpu_args=['-w', '-std=c++14'],
+                extra_cuda_args=['-w', '-std=c++14', '--expt-extended-lambda'])
+        ],
         cmdclass={'build_ext': BuildExtension},
         zip_safe=False)

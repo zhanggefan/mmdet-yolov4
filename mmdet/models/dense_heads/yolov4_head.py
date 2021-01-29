@@ -11,7 +11,6 @@ from mmcv.runner import force_fp32
 from mmdet.core import (build_anchor_generator, build_assigner,
                         build_bbox_coder, build_sampler, images_to_levels,
                         multi_apply, multiclass_nms)
-from mmdet.models.backbones.darknetcsp import Mish
 from ..builder import HEADS, build_loss
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
@@ -115,15 +114,16 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
         self.shape_match_thres = 4.
         self.conf_iou_loss_ratio = 1.
         self.conf_level_balance_weight = [4.0, 1.0, 0.4, 0.1, 0.1]
-        self.class_fre = None
+        self.class_freq = None
         self.num_obj_avg = 8
-        if self.train_cfg:
+        if self.train_cfg is not None:
             if hasattr(self.train_cfg, 'assigner'):
                 self.assigner = build_assigner(self.train_cfg.assigner)
             if hasattr(self.train_cfg, 'sampler'):
                 sampler_cfg = self.train_cfg.sampler
             else:
                 sampler_cfg = dict(type='PseudoSampler')
+            self.sampler = build_sampler(sampler_cfg, context=self)
             if hasattr(self.train_cfg, 'conf_iou_loss_ratio'):
                 self.conf_iou_loss_ratio = self.train_cfg.conf_iou_loss_ratio
             if hasattr(self.train_cfg, 'conf_level_balance_weight'):
@@ -134,8 +134,6 @@ class YOLOV4Head(BaseDenseHead, BBoxTestMixin):
                 self.num_obj_avg = self.train_cfg.num_obj_per_image
             if hasattr(self.train_cfg, 'shape_match_thres'):
                 self.shape_match_thres = self.train_cfg.shape_match_thres
-
-        self.sampler = build_sampler(sampler_cfg, context=self)
         
         self.one_hot_smoother = one_hot_smoother
 

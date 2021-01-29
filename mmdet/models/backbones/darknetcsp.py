@@ -8,29 +8,8 @@ from ..builder import BACKBONES
 import torch.nn as nn
 import torch
 
-from mmcv.cnn.bricks.registry import ACTIVATION_LAYERS
 from mmcv.cnn.bricks.activation import build_activation_layer
 from mmcv.cnn.bricks.norm import build_norm_layer
-
-try:
-    from mish_cuda import MishCudaFunction
-
-
-    class Mish(nn.Module):
-        def __init__(self, **kwargs):
-            super(Mish, self).__init__()
-
-        def forward(self, x):
-            return MishCudaFunction.apply(x)
-except:
-    class Mish(nn.Module):
-        def __init__(self, **kwargs):
-            super(Mish, self).__init__()
-
-        def forward(self, x):
-            return x * torch.nn.functional.softplus(x, threshold=10).tanh()
-
-ACTIVATION_LAYERS.register_module(module=Mish)
 
 
 class Conv(ConvModule):
