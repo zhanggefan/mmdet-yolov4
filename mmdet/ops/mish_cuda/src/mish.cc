@@ -1,50 +1,33 @@
-#include <ATen/native/TensorIterator.h>
 #include <torch/extension.h>
 
 using namespace pybind11::literals;
 
 namespace mish_cuda_kernel {
-void mish_kernel(torch::TensorIterator &iter);
-void mish_backward_kernel(torch::TensorIterator &iter);
+void mish(at::Tensor inp, at::Tensor out);
+void mish_backward(at::Tensor grad_out, at::Tensor inp, at::Tensor grad_inp);
 } // namespace mish_cuda_kernel
 namespace mish_cpu_kernel {
-void mish_kernel(torch::TensorIterator &iter);
-void mish_backward_kernel(torch::TensorIterator &iter);
+void mish(at::Tensor inp, at::Tensor out);
+void mish_backward(at::Tensor grad_out, at::Tensor inp, at::Tensor grad_inp);
 } // namespace mish_cpu_kernel
 
 torch::Tensor mish_forward(const torch::Tensor &input) {
   auto output = torch::empty_like(input);
-  auto iter = torch::TensorIterator::unary_op(output, input);
-  switch (iter.device_type()) {
-  case torch::kCUDA:
-    mish_cuda_kernel::mish_kernel(iter);
-    break;
-  case torch::kCPU:
-    mish_cpu_kernel::mish_kernel(iter);
-    break;
-  default:
-    TORCH_CHECK(false,
-                "Unsupported device type, should be CPU or CUDA but got ",
-                input.device().type());
+  if (input.is_cuda()) {
+    mish_cuda_kernel::mish(input, output);
+  } else {
+    mish_cpu_kernel::mish(input, output);
   }
   return output;
 }
 
 torch::Tensor mish_backward(const torch::Tensor &grad_out,
                             const torch::Tensor &input) {
-  torch::Tensor grad_inp = torch::empty_like(input);;
-  auto iter = torch::TensorIterator::binary_op(grad_inp, grad_out, input);
-  switch (iter.device_type()) {
-  case torch::kCUDA:
-    mish_cuda_kernel::mish_backward_kernel(iter);
-    break;
-  case torch::kCPU:
-    mish_cpu_kernel::mish_backward_kernel(iter);
-    break;
-  default:
-    TORCH_CHECK(false,
-                "Unsupported device type, should be CPU or CUDA but got ",
-                input.device().type());
+  torch::Tensor grad_inp = torch::empty_like(input);
+  if (grad_out.is_cuda()) {
+    mish_cuda_kernel::mish_backward(grad_out, input, grad_inp);
+  } else {
+    mish_cpu_kernel::mish_backward(grad_out, input, grad_inp);
   }
   return grad_inp;
 }
