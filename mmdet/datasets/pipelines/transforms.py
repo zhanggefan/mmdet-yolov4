@@ -4,9 +4,11 @@ import inspect
 import mmcv
 import numpy as np
 from numpy import random
+import cv2
 
 from mmdet.core import PolygonMasks
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
+from .compose import Compose as PipelineCompose
 from ..builder import PIPELINES
 
 try:
@@ -625,7 +627,7 @@ class RandomCrop(object):
                  allow_negative_crop=False,
                  bbox_clip_border=True):
         if crop_type not in [
-                'relative_range', 'relative', 'absolute', 'absolute_range'
+            'relative_range', 'relative', 'absolute', 'absolute_range'
         ]:
             raise ValueError(f'Invalid crop_type {crop_type}.')
         if crop_type in ['absolute', 'absolute_range']:
@@ -688,7 +690,7 @@ class RandomCrop(object):
                 bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
                 bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
             valid_inds = (bboxes[:, 2] > bboxes[:, 0]) & (
-                bboxes[:, 3] > bboxes[:, 1])
+                    bboxes[:, 3] > bboxes[:, 1])
             # If the crop does not contain any gt-bbox area and
             # allow_negative_crop is False, skip this image.
             if (key == 'gt_bboxes' and not valid_inds.any()
@@ -705,7 +707,7 @@ class RandomCrop(object):
             if mask_key in results:
                 results[mask_key] = results[mask_key][
                     valid_inds.nonzero()[0]].crop(
-                        np.asarray([crop_x1, crop_y1, crop_x2, crop_y2]))
+                    np.asarray([crop_x1, crop_y1, crop_x2, crop_y2]))
 
         # crop semantic seg
         for key in results.get('seg_fields', []):
@@ -853,7 +855,7 @@ class PhotoMetricDistortion(object):
                 'Only single img_fields is allowed'
         img = results['img']
         assert img.dtype == np.float32, \
-            'PhotoMetricDistortion needs the input image of dtype np.float32,'\
+            'PhotoMetricDistortion needs the input image of dtype np.float32,' \
             ' please set "to_float32=True" in "LoadImageFromFile" pipeline'
         # random brightness
         if random.randint(2):
@@ -1133,7 +1135,7 @@ class MinIoURandomCrop(object):
                 # seg fields
                 for key in results.get('seg_fields', []):
                     results[key] = results[key][patch[1]:patch[3],
-                                                patch[0]:patch[2]]
+                                   patch[0]:patch[2]]
                 return results
 
     def __repr__(self):
@@ -1555,8 +1557,8 @@ class RandomCenterCropPad(object):
         """
         center = (boxes[:, :2] + boxes[:, 2:]) / 2
         mask = (center[:, 0] > patch[0]) * (center[:, 1] > patch[1]) * (
-            center[:, 0] < patch[2]) * (
-                center[:, 1] < patch[3])
+                center[:, 0] < patch[2]) * (
+                       center[:, 1] < patch[3])
         return mask
 
     def _crop_image_and_paste(self, image, center, size):
@@ -1606,7 +1608,7 @@ class RandomCenterCropPad(object):
             cropped_center_y - top, cropped_center_y + bottom,
             cropped_center_x - left, cropped_center_x + right
         ],
-                          dtype=np.float32)
+            dtype=np.float32)
 
         return cropped_img, border, patch
 
@@ -1660,7 +1662,7 @@ class RandomCenterCropPad(object):
                         bboxes[:, 0:4:2] = np.clip(bboxes[:, 0:4:2], 0, new_w)
                         bboxes[:, 1:4:2] = np.clip(bboxes[:, 1:4:2], 0, new_h)
                     keep = (bboxes[:, 2] > bboxes[:, 0]) & (
-                        bboxes[:, 3] > bboxes[:, 1])
+                            bboxes[:, 3] > bboxes[:, 1])
                     bboxes = bboxes[keep]
                     results[key] = bboxes
                     if key in ['gt_bboxes']:
@@ -1808,4 +1810,152 @@ class CutOut(object):
         repr_str += (f'cutout_ratio={self.candidates}, ' if self.with_ratio
                      else f'cutout_shape={self.candidates}, ')
         repr_str += f'fill_in={self.fill_in})'
+        return repr_str
+
+
+@PIPELINES.register_module()
+class MosaicPipeline(object):
+
+    def __init__(self, individual_pipeline, pad_val=0):
+        self.individual_pipeline = PipelineCompose(individual_pipeline)
+        self.pad_val = pad_val
+
+    def __call__(self, results):
+        input_results = results.copy()
+        mosaic_results = [results]
+        dataset = results['dataset']
+        # load another 3 images
+        for _ in range(3):
+            idx = random.randint(0, len(dataset) - 1)
+            img_info = dataset.data_infos[idx]
+            ann_info = dataset.get_ann_info(idx)
+            _results = dict(img_info=img_info, ann_info=ann_info)
+            if dataset.proposals is not None:
+                _results['proposals'] = dataset.proposals[idx]
+            dataset.pre_pipeline(_results)
+            mosaic_results.append(_results)
+
+        for idx in range(4):
+            mosaic_results[idx] = self.individual_pipeline(mosaic_results[idx])
+
+        shapes = [results['pad_shape'] for results in mosaic_results]
+        cxy = max(shapes[0][0], shapes[1][0], shapes[0][1], shapes[2][1])
+        canvas_shape = (cxy * 2, cxy * 2, shapes[0][2])
+
+        # base image with 4 tiles
+        canvas = dict()
+        for key in mosaic_results[0].get('img_fields', []):
+            canvas[key] = np.full(canvas_shape, self.pad_val, dtype=np.uint8)
+        for i, results in enumerate(mosaic_results):
+            h, w = results['pad_shape'][:2]
+            # place img in img4
+            if i == 0:  # top left
+                x1, y1, x2, y2 = cxy - w, cxy - h, cxy, cxy
+            elif i == 1:  # top right
+                x1, y1, x2, y2 = cxy, cxy - h, cxy + w, cxy
+            elif i == 2:  # bottom left
+                x1, y1, x2, y2 = cxy - w, cxy, cxy, cxy + h
+            elif i == 3:  # bottom right
+                x1, y1, x2, y2 = cxy, cxy, cxy + w, cxy + h
+
+            for key in mosaic_results[0].get('img_fields', []):
+                canvas[key][y1:y2, x1:x2] = results[key]
+
+            for key in results.get('bbox_fields', []):
+                bboxes = results[key]
+                bboxes[:, 0::2] = bboxes[:, 0::2] + x1
+                bboxes[:, 1::2] = bboxes[:, 1::2] + y1
+                results[key] = bboxes
+
+        output_results = input_results
+        output_results['filename'] = None
+        output_results['ori_filename'] = None
+        output_results['img_fields'] = mosaic_results[0].get('img_fields', [])
+        output_results['bbox_fields'] = mosaic_results[0].get(
+            'bbox_fields', [])
+        for key in output_results['img_fields']:
+            output_results[key] = canvas[key]
+
+        for key in output_results['bbox_fields']:
+            output_results[key] = np.concatenate(
+                [r[key] for r in mosaic_results], axis=0)
+
+        output_results['gt_labels'] = np.concatenate(
+            [r['gt_labels'] for r in mosaic_results], axis=0)
+
+        output_results['img_shape'] = canvas_shape
+        output_results['ori_shape'] = canvas_shape
+        output_results['flip'] = False
+        output_results['flip_direction'] = None
+
+        return output_results
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'individual_pipeline={self.individual_pipeline}, '
+                    f'pad_val={self.pad_val})')
+        return repr_str
+
+
+@PIPELINES.register_module()
+class HueSaturationValueJitter(object):
+
+    def __init__(self, hue_ratio=0.5, saturation_ratio=0.5, value_ratio=0.5):
+        self.h_ratio = hue_ratio
+        self.s_ratio = saturation_ratio
+        self.v_ratio = value_ratio
+
+    def __call__(self, results):
+        for key in results.get('img_fields', []):
+            img = results[key]
+            # random gains
+            r = np.array([random.uniform(-1., 1.) for _ in range(3)]) * \
+                [self.h_ratio, self.s_ratio, self.v_ratio] + 1
+            hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+            dtype = img.dtype  # uint8
+
+            x = np.arange(0, 256, dtype=np.int16)
+            lut_hue = ((x * r[0]) % 180).astype(dtype)
+            lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+            lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+
+            img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat),
+                                 cv2.LUT(val, lut_val))).astype(dtype)
+            cv2.cvtColor(
+                img_hsv, cv2.COLOR_HSV2BGR,
+                dst=results[key])  # no return needed
+        return results
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'hue_ratio={self.h_ratio}, '
+                    f'saturation_ratio={self.s_ratio}, '
+                    f'value_ratio={self.v_ratio})')
+        return repr_str
+
+
+@PIPELINES.register_module()
+class GtBBoxesFilter(object):
+
+    def __init__(self, min_size=2, max_aspect_ratio=20):
+        assert max_aspect_ratio > 1
+        self.min_size = min_size
+        self.max_aspect_ratio = max_aspect_ratio
+
+    def __call__(self, results):
+        bboxes = results['gt_bboxes']
+        labels = results['gt_labels']
+        w = bboxes[:, 2] - bboxes[:, 0]
+        h = bboxes[:, 3] - bboxes[:, 1]
+        ar = np.maximum(w / (h + 1e-16), h / (w + 1e-16))
+        valid = (w > self.min_size) & (h > self.min_size) & (
+                ar < self.max_aspect_ratio)
+        results['gt_bboxes'] = bboxes[valid]
+        results['gt_labels'] = labels[valid]
+        return results
+
+    def __repr__(self):
+        repr_str = (f'{self.__class__.__name__}('
+                    f'min_size={self.min_size}, '
+                    f'max_aspect_ratio={self.max_aspect_ratio})')
         return repr_str

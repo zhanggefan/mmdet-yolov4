@@ -27,7 +27,7 @@ from .two_stage import TwoStageDetector
 from .vfnet import VFNet
 from .yolact import YOLACT
 from .yolo import YOLOV3
-from .yolov4 import YOLOV4
+from .yolocsp import YOLOCSP
 
 __all__ = [
     'ATSS',
@@ -59,5 +59,5 @@ __all__ = [
     'TridentFasterRCNN',
     'SparseRCNN',
     'SCNet',
-    'YOLOV4',
+    'YOLOCSP',
 ]

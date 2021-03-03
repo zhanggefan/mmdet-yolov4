@@ -6,12 +6,12 @@ from .fpn_carafe import FPN_CARAFE
 from .hrfpn import HRFPN
 from .nas_fpn import NASFPN
 from .nasfcos_fpn import NASFCOS_FPN
-from .pacspfpn import PACSPFPN
 from .pafpn import PAFPN
 from .rfp import RFP
 from .yolo_neck import YOLOV3Neck
+from .yolo_neck_csp import YOLOV4Neck, YOLOV5Neck
 
 __all__ = [
     'FPN', 'BFP', 'ChannelMapper', 'HRFPN', 'NASFPN', 'FPN_CARAFE', 'PAFPN',
-    'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'PACSPFPN'
+    'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'YOLOV4Neck', 'YOLOV5Neck'
 ]

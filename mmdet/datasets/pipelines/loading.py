@@ -31,11 +31,14 @@ class LoadImageFromFile(object):
     def __init__(self,
                  to_float32=False,
                  color_type='color',
-                 file_client_args=dict(backend='disk')):
+                 file_client_args=dict(backend='disk'),
+                 im_decode_backend=None):
         self.to_float32 = to_float32
         self.color_type = color_type
         self.file_client_args = file_client_args.copy()
         self.file_client = None
+        if im_decode_backend is not None:
+            mmcv.use_backend(im_decode_backend)
 
     def __call__(self, results):
         """Call functions to load image and get image meta information.
@@ -57,7 +60,14 @@ class LoadImageFromFile(object):
             filename = results['img_info']['filename']
 
         img_bytes = self.file_client.get(filename)
-        img = mmcv.imfrombytes(img_bytes, flag=self.color_type)
+        try:
+            img = mmcv.imfrombytes(img_bytes, flag=self.color_type)
+        except Exception as imread_error:
+            # fall back to cv2 for more stability
+            print(imread_error, 'Switch to cv2 for now.')
+            img = mmcv.imfrombytes(
+                img_bytes, flag=self.color_type, backend='cv2')
+
         if self.to_float32:
             img = img.astype(np.float32)
 
@@ -426,7 +436,7 @@ class LoadProposals(object):
 
     def __repr__(self):
         return self.__class__.__name__ + \
-            f'(num_max_proposals={self.num_max_proposals})'
+               f'(num_max_proposals={self.num_max_proposals})'
 
 
 @PIPELINES.register_module()
