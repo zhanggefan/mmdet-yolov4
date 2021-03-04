@@ -62,9 +62,8 @@ class LoadImageFromFile(object):
         img_bytes = self.file_client.get(filename)
         try:
             img = mmcv.imfrombytes(img_bytes, flag=self.color_type)
-        except Exception as imread_error:
+        except Exception:
             # fall back to cv2 for more stability
-            print(imread_error, 'Switch to cv2 for now.')
             img = mmcv.imfrombytes(
                 img_bytes, flag=self.color_type, backend='cv2')
 

@@ -86,7 +86,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=32,
-    workers_per_gpu=4,
+    workers_per_gpu=6,
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_train2017.json',
@@ -108,7 +108,7 @@ nominal_batch_size = 64
 # optimizer
 optimizer = dict(
     type='SGD',
-    lr=0.01,
+    lr=0.32,
     momentum=0.937,
     weight_decay=0.0005,
     nesterov=True,
@@ -117,7 +117,6 @@ optimizer = dict(
 optimizer_config = dict(
     type='AMPGradAccumulateOptimizerHook',
     nominal_batch_size=nominal_batch_size,
-    samples_per_gpu=data['samples_per_gpu'],
     grad_clip=dict(max_norm=35, norm_type=2),
 )
 
@@ -142,7 +141,6 @@ custom_hooks = [
         type='YOLOV4EMAHook',
         momentum=0.9999,
         nominal_batch_size=nominal_batch_size,
-        samples_per_gpu=data['samples_per_gpu'],
         warm_up=10000,
         resume_from=resume_from,
         priority='HIGH')
@@ -150,7 +148,7 @@ custom_hooks = [
 
 runner = dict(type='EpochBasedRunner', max_epochs=300)
 
-evaluation = dict(interval=1, metric='bbox')
+evaluation = dict(interval=1, metric='fast-bbox')
 
 checkpoint_config = dict(interval=5)
 

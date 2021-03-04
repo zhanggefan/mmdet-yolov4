@@ -28,7 +28,6 @@ except AssertionError:
 
 @DATASETS.register_module()
 class CocoDataset(CustomDataset):
-
     CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
                'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
@@ -401,7 +400,9 @@ class CocoDataset(CustomDataset):
         """
 
         metrics = metric if isinstance(metric, list) else [metric]
-        allowed_metrics = ['bbox', 'segm', 'proposal', 'proposal_fast']
+        allowed_metrics = [
+            'bbox', 'segm', 'proposal', 'proposal_fast', 'fast-bbox'
+        ]
         for metric in metrics:
             if metric not in allowed_metrics:
                 raise KeyError(f'metric {metric} is not supported')
@@ -411,6 +412,11 @@ class CocoDataset(CustomDataset):
         if metric_items is not None:
             if not isinstance(metric_items, list):
                 metric_items = [metric_items]
+        if 'fast-bbox' in metrics:
+            assert len(metrics) == 1, \
+                'fast-bbox evaluation can only be used alone!'
+            return super(CocoDataset, self).evaluate(
+                results, metric='mAP', logger=logger, iou_thr=list(iou_thrs))
 
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 

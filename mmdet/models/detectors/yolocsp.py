@@ -46,13 +46,16 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
 
     def __init__(self, *wargs, **kwargs):
         nominal_batch_size = kwargs.pop('nominal_batch_size', None)
-        samples_per_gpu = kwargs.pop('samples_per_gpu', None)
-        if nominal_batch_size is not None and samples_per_gpu is not None:
-            _, word_size = get_dist_info()
-            self.accumulation = math.ceil(nominal_batch_size /
-                                          (samples_per_gpu * word_size))
-        else:
-            self.accumulation = 1
+        accumulation = kwargs.pop('accumulation', None)
+        self.accumulation = 1
+        self.nominal_batch_size = None
+        if accumulation is not None:
+            assert isinstance(accumulation, int) and accumulation > 0
+            self.accumulation = accumulation
+        elif nominal_batch_size is not None:
+            self.accumulation = None
+            self.nominal_batch_size = nominal_batch_size
+
         self.scaler = GradScaler()
         super(AMPGradAccumulateOptimizerHook, self).__init__(*wargs, **kwargs)
 
@@ -63,6 +66,15 @@ class AMPGradAccumulateOptimizerHook(OptimizerHook):
                                            'using this optimizer hook! '
         runner.model.zero_grad()
         runner.optimizer.zero_grad()
+
+    def before_train_epoch(self, runner):
+        super(AMPGradAccumulateOptimizerHook, self).before_train_epoch(runner)
+        if self.accumulation is None:
+            assert self.nominal_batch_size is not None
+            samples_per_gpu = runner.data_loader.sampler.samples_per_gpu
+            _, word_size = get_dist_info()
+            self.accumulation = math.ceil(self.nominal_batch_size /
+                                          (samples_per_gpu * word_size))
 
     def before_train_iter(self, runner):
         if runner.iter % self.accumulation == 0:
@@ -93,19 +105,31 @@ class Fp16GradAccumulateOptimizerHook(Fp16OptimizerHook):
 
     def __init__(self, *wargs, **kwargs):
         nominal_batch_size = kwargs.pop('nominal_batch_size', None)
-        samples_per_gpu = kwargs.pop('samples_per_gpu', None)
-        if nominal_batch_size is not None and samples_per_gpu is not None:
-            _, word_size = get_dist_info()
-            self.accumulation = math.ceil(nominal_batch_size /
-                                          (samples_per_gpu * word_size))
-        else:
-            self.accumulation = 1
+        accumulation = kwargs.pop('accumulation', None)
+        self.accumulation = 1
+        self.nominal_batch_size = None
+        if accumulation is not None:
+            assert isinstance(accumulation, int) and accumulation > 0
+            self.accumulation = accumulation
+        elif nominal_batch_size is not None:
+            self.accumulation = None
+            self.nominal_batch_size = nominal_batch_size
+
         super(Fp16GradAccumulateOptimizerHook, self).__init__(*wargs, **kwargs)
 
     def before_run(self, runner):
         super(Fp16GradAccumulateOptimizerHook, self).before_run(runner)
         runner.model.zero_grad()
         runner.optimizer.zero_grad()
+
+    def before_train_epoch(self, runner):
+        super(Fp16GradAccumulateOptimizerHook, self).before_train_epoch(runner)
+        if self.accumulation is None:
+            assert self.nominal_batch_size is not None
+            samples_per_gpu = runner.data_loader.sampler.samples_per_gpu
+            _, word_size = get_dist_info()
+            self.accumulation = math.ceil(self.nominal_batch_size /
+                                          (samples_per_gpu * word_size))
 
     def before_train_iter(self, runner):
         if runner.iter % self.accumulation == 0:
@@ -225,20 +249,18 @@ class YOLOV4EMAHook(Hook):
                  momentum=0.9999,
                  interval=None,
                  nominal_batch_size=None,
-                 samples_per_gpu=None,
                  warm_up=2000,
                  resume_from=None):
+        self.interval = 1
+        self.nominal_batch_size = None
+        self.warm_up = warm_up
         if interval is not None:
             assert isinstance(interval, int) and interval > 0
             self.interval = interval
-        else:
-            if nominal_batch_size is not None and samples_per_gpu is not None:
-                _, word_size = get_dist_info()
-                self.interval = math.ceil(nominal_batch_size /
-                                          (samples_per_gpu * word_size))
-            else:
-                self.interval = 1
-        self.warm_up = warm_up * self.interval
+        elif nominal_batch_size is not None:
+            self.interval = None
+            self.nominal_batch_size = nominal_batch_size
+
         assert momentum > 0 and momentum < 1
         self.momentum = momentum
         self.checkpoint = resume_from
@@ -267,8 +289,8 @@ class YOLOV4EMAHook(Hook):
         if (runner.iter + 1) % self.interval != 0:
             return
         for name, parameter in self.model_parameters.items():
-            momentum = self.momentum * \
-                       (1 - math.exp(-runner.iter / self.warm_up))
+            momentum = self.momentum * (
+                1 - math.exp(-runner.iter / (self.warm_up * self.interval)))
             buffer_name = self.param_ema_buffer[name]
             if parameter.dtype.is_floating_point:
                 buffer_parameter = self.model_buffers[buffer_name]
@@ -285,6 +307,12 @@ class YOLOV4EMAHook(Hook):
     def before_train_epoch(self, runner):
         """We recover model's parameter from ema backup after last epoch's
         EvalHook."""
+        if self.interval is None:
+            assert self.nominal_batch_size is not None
+            samples_per_gpu = runner.data_loader.sampler.samples_per_gpu
+            _, word_size = get_dist_info()
+            self.interval = math.ceil(self.nominal_batch_size /
+                                      (samples_per_gpu * word_size))
         self._swap_ema_parameters()
 
     def _swap_ema_parameters(self):

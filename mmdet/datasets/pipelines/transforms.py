@@ -1,15 +1,15 @@
 import copy
 import inspect
 
+import cv2
 import mmcv
 import numpy as np
 from numpy import random
-import cv2
 
 from mmdet.core import PolygonMasks
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
-from .compose import Compose as PipelineCompose
 from ..builder import PIPELINES
+from .compose import Compose as PipelineCompose
 
 try:
     from imagecorruptions import corrupt
@@ -627,7 +627,7 @@ class RandomCrop(object):
                  allow_negative_crop=False,
                  bbox_clip_border=True):
         if crop_type not in [
-            'relative_range', 'relative', 'absolute', 'absolute_range'
+                'relative_range', 'relative', 'absolute', 'absolute_range'
         ]:
             raise ValueError(f'Invalid crop_type {crop_type}.')
         if crop_type in ['absolute', 'absolute_range']:
@@ -690,7 +690,7 @@ class RandomCrop(object):
                 bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
                 bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
             valid_inds = (bboxes[:, 2] > bboxes[:, 0]) & (
-                    bboxes[:, 3] > bboxes[:, 1])
+                bboxes[:, 3] > bboxes[:, 1])
             # If the crop does not contain any gt-bbox area and
             # allow_negative_crop is False, skip this image.
             if (key == 'gt_bboxes' and not valid_inds.any()
@@ -707,7 +707,7 @@ class RandomCrop(object):
             if mask_key in results:
                 results[mask_key] = results[mask_key][
                     valid_inds.nonzero()[0]].crop(
-                    np.asarray([crop_x1, crop_y1, crop_x2, crop_y2]))
+                        np.asarray([crop_x1, crop_y1, crop_x2, crop_y2]))
 
         # crop semantic seg
         for key in results.get('seg_fields', []):
@@ -855,7 +855,7 @@ class PhotoMetricDistortion(object):
                 'Only single img_fields is allowed'
         img = results['img']
         assert img.dtype == np.float32, \
-            'PhotoMetricDistortion needs the input image of dtype np.float32,' \
+            'PhotoMetricDistortion needs the input image of dtype np.float32,'\
             ' please set "to_float32=True" in "LoadImageFromFile" pipeline'
         # random brightness
         if random.randint(2):
@@ -1135,7 +1135,7 @@ class MinIoURandomCrop(object):
                 # seg fields
                 for key in results.get('seg_fields', []):
                     results[key] = results[key][patch[1]:patch[3],
-                                   patch[0]:patch[2]]
+                                                patch[0]:patch[2]]
                 return results
 
     def __repr__(self):
@@ -1557,8 +1557,8 @@ class RandomCenterCropPad(object):
         """
         center = (boxes[:, :2] + boxes[:, 2:]) / 2
         mask = (center[:, 0] > patch[0]) * (center[:, 1] > patch[1]) * (
-                center[:, 0] < patch[2]) * (
-                       center[:, 1] < patch[3])
+            center[:, 0] < patch[2]) * (
+                center[:, 1] < patch[3])
         return mask
 
     def _crop_image_and_paste(self, image, center, size):
@@ -1608,7 +1608,7 @@ class RandomCenterCropPad(object):
             cropped_center_y - top, cropped_center_y + bottom,
             cropped_center_x - left, cropped_center_x + right
         ],
-            dtype=np.float32)
+                          dtype=np.float32)
 
         return cropped_img, border, patch
 
@@ -1662,7 +1662,7 @@ class RandomCenterCropPad(object):
                         bboxes[:, 0:4:2] = np.clip(bboxes[:, 0:4:2], 0, new_w)
                         bboxes[:, 1:4:2] = np.clip(bboxes[:, 1:4:2], 0, new_h)
                     keep = (bboxes[:, 2] > bboxes[:, 0]) & (
-                            bboxes[:, 3] > bboxes[:, 1])
+                        bboxes[:, 3] > bboxes[:, 1])
                     bboxes = bboxes[keep]
                     results[key] = bboxes
                     if key in ['gt_bboxes']:
@@ -1825,11 +1825,11 @@ class MosaicPipeline(object):
         mosaic_results = [results]
         dataset = results['dataset']
         # load another 3 images
-        for _ in range(3):
-            idx = random.randint(0, len(dataset) - 1)
+        indices = dataset.batch_rand_others(results['_idx'], 3)
+        for idx in indices:
             img_info = dataset.data_infos[idx]
             ann_info = dataset.get_ann_info(idx)
-            _results = dict(img_info=img_info, ann_info=ann_info)
+            _results = dict(img_info=img_info, ann_info=ann_info, _idx=idx)
             if dataset.proposals is not None:
                 _results['proposals'] = dataset.proposals[idx]
             dataset.pre_pipeline(_results)
@@ -1949,7 +1949,7 @@ class GtBBoxesFilter(object):
         h = bboxes[:, 3] - bboxes[:, 1]
         ar = np.maximum(w / (h + 1e-16), h / (w + 1e-16))
         valid = (w > self.min_size) & (h > self.min_size) & (
-                ar < self.max_aspect_ratio)
+            ar < self.max_aspect_ratio)
         results['gt_bboxes'] = bboxes[valid]
         results['gt_labels'] = labels[valid]
         return results

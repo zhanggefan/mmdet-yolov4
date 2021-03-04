@@ -177,6 +177,18 @@ class CustomDataset(Dataset):
         pool = np.where(self.flag == self.flag[idx])[0]
         return np.random.choice(pool)
 
+    def batch_rand_others(self, idx, batch):
+        """Get a batch of random index from the same group as the given
+        index."""
+        mask = (self.flag == self.flag[idx])
+        mask[idx] = False
+        pool = np.where(mask)[0]
+        if len(pool) == 0:
+            return np.array([idx] * batch)
+        if len(pool) < batch:
+            return np.random.choice(pool, size=batch, replace=True)
+        return np.random.choice(pool, size=batch, replace=False)
+
     def __getitem__(self, idx):
         """Get training/test data after pipeline.
 
@@ -210,7 +222,7 @@ class CustomDataset(Dataset):
 
         img_info = self.data_infos[idx]
         ann_info = self.get_ann_info(idx)
-        results = dict(img_info=img_info, ann_info=ann_info)
+        results = dict(img_info=img_info, ann_info=ann_info, _idx=idx)
         if self.proposals is not None:
             results['proposals'] = self.proposals[idx]
         self.pre_pipeline(results)
