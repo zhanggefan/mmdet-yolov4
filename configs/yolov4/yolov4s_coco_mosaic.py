@@ -93,6 +93,7 @@ data = dict(
         img_prefix=data_root + 'train2017/',
         pipeline=train_pipeline),
     val=dict(
+        samples_per_gpu=32,
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_val2017.json',
         img_prefix=data_root + 'val2017/',
