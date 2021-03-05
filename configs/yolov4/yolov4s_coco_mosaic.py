@@ -1,5 +1,5 @@
 model = dict(
-    type='YOLOCSP',
+    type='SingleStageDetector',
     backbone=dict(type='DarknetCSP', scale='v4s5p', out_indices=[3, 4, 5]),
     neck=dict(
         type='YOLOV4Neck',
@@ -15,7 +15,7 @@ model = dict(
         score_thr=0.001,
         nms=dict(type='nms', iou_threshold=0.65),
         max_per_img=300),
-    use_amp=True)
+)
 
 dataset_type = 'CocoDataset'
 data_root = 'data/coco/'
@@ -108,17 +108,18 @@ nominal_batch_size = 64
 # optimizer
 optimizer = dict(
     type='SGD',
-    lr=0.32,
+    lr=0.01,
     momentum=0.937,
     weight_decay=0.0005,
     nesterov=True,
     paramwise_cfg=dict(bias_decay_mult=0., norm_decay_mult=0.))
 
 optimizer_config = dict(
-    type='AMPGradAccumulateOptimizerHook',
+    type='Fp16GradAccumulateOptimizerHook',
     nominal_batch_size=nominal_batch_size,
     grad_clip=dict(max_norm=35, norm_type=2),
-)
+    loss_scale=dict(
+        init_scale=2**16, mode='dynamic', scale_factor=2., scale_window=1000))
 
 # learning policy
 lr_config = dict(
@@ -131,14 +132,14 @@ resume_from = None
 
 custom_hooks = [
     dict(
-        type='YoloV4WarmUpHook',
+        type='DetailedLinearWarmUpHook',
         warmup_iters=10000,
         lr_weight_warmup_ratio=0.,
         lr_bias_warmup_ratio=10.,
         momentum_warmup_ratio=0.95,
         priority='NORMAL'),
     dict(
-        type='YOLOV4EMAHook',
+        type='StateEMAHook',
         momentum=0.9999,
         nominal_batch_size=nominal_batch_size,
         warm_up=10000,

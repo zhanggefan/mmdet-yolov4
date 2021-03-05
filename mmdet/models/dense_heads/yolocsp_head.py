@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import normal_init
 from mmcv.runner import force_fp32
-from torch.cuda.amp import autocast
 
 from mmdet.core import (build_anchor_generator, build_assigner,
                         build_bbox_coder, build_sampler, multi_apply,
@@ -95,10 +94,10 @@ class YOLOCSPHead(BaseDenseHead, BBoxTestMixin):
                 type='BN', requires_grad=True, eps=0.001, momentum=0.03),
             act_cfg=dict(type='Mish'),
             loss_cls=dict(
-                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.5),
+                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=32.),
             loss_conf=dict(
-                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
-            loss_bbox=dict(type='GIoULoss', loss_weight=0.05),
+                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=64.),
+            loss_bbox=dict(type='GIoULoss', loss_weight=3.2),
             class_agnostic=False,
             train_cfg=None,
             test_cfg=None):
@@ -245,71 +244,64 @@ class YOLOCSPHead(BaseDenseHead, BBoxTestMixin):
                 (n,) tensor where each item is the predicted class label of the
                 corresponding box.
         """
-        with autocast(enabled=False):
-            num_levels = len(pred_maps)
-            num_image = len(img_metas)
+        num_levels = len(pred_maps)
+        num_image = len(img_metas)
 
-            featmap_sizes = [
-                pred_maps[i].shape[-2:] for i in range(num_levels)
-            ]
-            mlvl_anchors = self.anchor_generator.grid_anchors(
-                featmap_sizes, pred_maps[0].device)
+        featmap_sizes = [pred_maps[i].shape[-2:] for i in range(num_levels)]
+        mlvl_anchors = self.anchor_generator.grid_anchors(
+            featmap_sizes, pred_maps[0].device)
 
-            mlvl_bbox_pred = []
-            mlvl_conf_pred = []
-            mlvl_score_pred = []
+        mlvl_bbox_pred = []
+        mlvl_conf_pred = []
+        mlvl_score_pred = []
 
-            for lvl in range(num_levels):
-                lvl_pred_maps = pred_maps[lvl].permute(0, 2, 3, 1).reshape(
-                    (num_image, -1, self.num_attrib))
-                # activation
-                lvl_pred_maps = lvl_pred_maps.sigmoid()
-                # class score
-                if not self.class_agnostic:
-                    mlvl_score_pred.append(lvl_pred_maps[:, :, 5:])
-                # conf score
-                mlvl_conf_pred.append(lvl_pred_maps[:, :, 4])
-                # bbox transform
-                lvl_pred_maps[:, :, :2] = lvl_pred_maps[:, :, :2] * 2. - 1.
-                lvl_pred_maps[:, :, 2:4] = (lvl_pred_maps[:, :, 2:4] * 2)**2
-                lvl_bbox_pred = lvl_pred_maps[:, :, :4].reshape(-1, 4)
-                lvl_anchors = mlvl_anchors[lvl][None, ...].repeat(
-                    (num_image, 1, 1))
-
-                lvl_bbox_pred = self.bbox_coder.decode(
-                    bboxes=lvl_anchors.reshape(-1, 4),
-                    pred_bboxes=lvl_bbox_pred.reshape(-1, 4),
-                    stride=self.featmap_strides[lvl])
-                lvl_bbox_pred = lvl_bbox_pred.reshape((num_image, -1, 4))
-                mlvl_bbox_pred.append(lvl_bbox_pred)
-
+        for lvl in range(num_levels):
+            lvl_pred_maps = pred_maps[lvl].permute(0, 2, 3, 1).reshape(
+                (num_image, -1, self.num_attrib))
+            # activation
+            lvl_pred_maps = lvl_pred_maps.sigmoid()
+            # class score
             if not self.class_agnostic:
-                mimg_score_pred = [
-                    score for score in torch.cat(mlvl_score_pred, dim=1)
-                ]
-            else:
-                mimg_score_pred = None
-            mimg_conf_pred = [
-                conf for conf in torch.cat(mlvl_conf_pred, dim=1)
-            ]
-            mimg_bbox_pred = [
-                bbox for bbox in torch.cat(mlvl_bbox_pred, dim=1)
-            ]
+                mlvl_score_pred.append(lvl_pred_maps[:, :, 5:])
+            # conf score
+            mlvl_conf_pred.append(lvl_pred_maps[:, :, 4])
+            # bbox transform
+            lvl_pred_maps[:, :, :2] = lvl_pred_maps[:, :, :2] * 2. - 1.
+            lvl_pred_maps[:, :, 2:4] = (lvl_pred_maps[:, :, 2:4] * 2)**2
+            lvl_bbox_pred = lvl_pred_maps[:, :, :4].reshape(-1, 4)
+            lvl_anchors = mlvl_anchors[lvl][None, ...].repeat(
+                (num_image, 1, 1))
 
-            result_list = []
+            lvl_bbox_pred = self.bbox_coder.decode(
+                bboxes=lvl_anchors.reshape(-1, 4),
+                pred_bboxes=lvl_bbox_pred.reshape(-1, 4),
+                stride=self.featmap_strides[lvl])
+            lvl_bbox_pred = lvl_bbox_pred.reshape((num_image, -1, 4))
+            mlvl_bbox_pred.append(lvl_bbox_pred)
 
-            for img_id in range(len(img_metas)):
-                scale_factor = img_metas[img_id]['scale_factor']
-                proposals = self._get_bboxes_single(
-                    cls_pred=mimg_score_pred[img_id]
-                    if mimg_score_pred is not None else None,
-                    conf_pred=mimg_conf_pred[img_id],
-                    bbox_pred=mimg_bbox_pred[img_id],
-                    scale_factor=scale_factor,
-                    cfg=cfg,
-                    rescale=rescale,
-                    with_nms=with_nms)
-                result_list.append(proposals)
+        if not self.class_agnostic:
+            mimg_score_pred = [
+                score for score in torch.cat(mlvl_score_pred, dim=1)
+            ]
+        else:
+            mimg_score_pred = None
+        mimg_conf_pred = [conf for conf in torch.cat(mlvl_conf_pred, dim=1)]
+        mimg_bbox_pred = [bbox for bbox in torch.cat(mlvl_bbox_pred, dim=1)]
+
+        result_list = []
+
+        for img_id in range(len(img_metas)):
+            scale_factor = img_metas[img_id]['scale_factor']
+            proposals = self._get_bboxes_single(
+                cls_pred=mimg_score_pred[img_id]
+                if mimg_score_pred is not None else None,
+                conf_pred=mimg_conf_pred[img_id],
+                bbox_pred=mimg_bbox_pred[img_id],
+                scale_factor=scale_factor,
+                cfg=cfg,
+                rescale=rescale,
+                with_nms=with_nms)
+            result_list.append(proposals)
         return result_list
 
     def _get_bboxes_single(self,
@@ -407,53 +399,51 @@ class YOLOCSPHead(BaseDenseHead, BBoxTestMixin):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
-        num_gts = pred_maps[0].new_tensor(
-            [g.size(0) for g in gt_bboxes]).mean()
+        num_gts = pred_maps[0].new_tensor([g.size(0)
+                                           for g in gt_bboxes]).mean()
 
-        with autocast(enabled=False):
+        pred_maps = [p.float() for p in pred_maps]
 
-            pred_maps = [p.float() for p in pred_maps]
+        device = pred_maps[0][0].device
 
-            device = pred_maps[0][0].device
+        featmap_sizes = [
+            pred_maps[i].shape[-2:] for i in range(self.num_levels)
+        ]
 
-            featmap_sizes = [
-                pred_maps[i].shape[-2:] for i in range(self.num_levels)
-            ]
+        responsible_indices = self.anchor_generator.responsible_indices(
+            featmap_sizes,
+            gt_bboxes,
+            neighbor=2 if self.assigner is None else 3,
+            shape_match_thres=self.shape_match_thres,
+            device=device)
 
-            responsible_indices = self.anchor_generator.responsible_indices(
-                featmap_sizes,
-                gt_bboxes,
-                neighbor=2 if self.assigner is None else 3,
-                shape_match_thres=self.shape_match_thres,
-                device=device)
+        if self.assigner is None:
+            results = self.get_targets_no_assigner(responsible_indices,
+                                                   gt_bboxes, gt_labels)
 
-            if self.assigner is None:
-                results = self.get_targets_no_assigner(responsible_indices,
-                                                       gt_bboxes, gt_labels)
+            (mlvl_pos_indices, mlvl_gt_bboxes_targets,
+             mlvl_gt_labels_targets) = results
 
-                (mlvl_pos_indices, mlvl_gt_bboxes_targets,
-                 mlvl_gt_labels_targets) = results
+            mlvl_anchors = self.anchor_generator.grid_anchors(
+                featmap_sizes, device)
 
-                mlvl_anchors = self.anchor_generator.grid_anchors(
-                    featmap_sizes, device)
+            # valid_flag_list = []
+            # for img_id, img_meta in enumerate(img_metas):
+            #     multi_level_flags = self.anchor_generator.valid_flags(
+            #         featmap_sizes, img_meta['pad_shape'], device)
+            #     valid_flag_list.append(multi_level_flags)
 
-                # valid_flag_list = []
-                # for img_id, img_meta in enumerate(img_metas):
-                #     multi_level_flags = self.anchor_generator.valid_flags(
-                #         featmap_sizes, img_meta['pad_shape'], device)
-                #     valid_flag_list.append(multi_level_flags)
+            losses_cls, losses_conf, losses_bbox = multi_apply(
+                self.loss_single_no_assigner, pred_maps, mlvl_anchors,
+                self.featmap_strides, mlvl_pos_indices, mlvl_gt_bboxes_targets,
+                mlvl_gt_labels_targets)
+        else:
+            raise NotImplementedError
 
-                losses_cls, losses_conf, losses_bbox = multi_apply(
-                    self.loss_single_no_assigner, pred_maps, mlvl_anchors,
-                    self.featmap_strides, mlvl_pos_indices,
-                    mlvl_gt_bboxes_targets, mlvl_gt_labels_targets)
-            else:
-                raise NotImplementedError
-
-            losses_conf = [
-                loss_conf * balance for loss_conf, balance in zip(
-                    losses_conf, self.conf_level_balance_weight)
-            ]
+        losses_conf = [
+            loss_conf * balance for loss_conf, balance in zip(
+                losses_conf, self.conf_level_balance_weight)
+        ]
 
         if not self.class_agnostic:
             return dict(
