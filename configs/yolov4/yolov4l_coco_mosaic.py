@@ -133,9 +133,9 @@ custom_hooks = [
     dict(
         type='YoloV4WarmUpHook',
         warmup_iters=10000,
-        lr_weight_warmup=0.,
-        lr_bias_warmup=0.1,
-        momentum_warmup=0.9,
+        lr_weight_warmup_ratio=0.,
+        lr_bias_warmup_ratio=10.,
+        momentum_warmup_ratio=0.95,
         priority='NORMAL'),
     dict(
         type='YOLOV4EMAHook',
@@ -148,7 +148,7 @@ custom_hooks = [
 
 runner = dict(type='EpochBasedRunner', max_epochs=300)
 
-evaluation = dict(interval=1, metric='fast-bbox')
+evaluation = dict(interval=1, metric='bbox')
 
 checkpoint_config = dict(interval=5)
 

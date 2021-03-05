@@ -170,15 +170,15 @@ class Fp16GradAccumulateOptimizerHook(Fp16OptimizerHook):
 class YoloV4WarmUpHook(Hook):
 
     def __init__(self,
-                 warmup_iters=1000,
-                 lr_weight_warmup=0.,
-                 lr_bias_warmup=0.1,
-                 momentum_warmup=0.9):
+                 warmup_iters=10000,
+                 lr_weight_warmup_ratio=0.,
+                 lr_bias_warmup_ratio=10.,
+                 momentum_warmup_ratio=0.95):
 
         self.warmup_iters = warmup_iters
-        self.lr_weight_warmup = lr_weight_warmup
-        self.lr_bias_warmup = lr_bias_warmup
-        self.momentum_warmup = momentum_warmup
+        self.lr_weight_warmup_ratio = lr_weight_warmup_ratio
+        self.lr_bias_warmup_ratio = lr_bias_warmup_ratio
+        self.momentum_warmup_ratio = momentum_warmup_ratio
 
         self.bias_base_lr = {}  # initial lr for all param groups
         self.weight_base_lr = {}
@@ -207,17 +207,18 @@ class YoloV4WarmUpHook(Hook):
         if runner.iter <= self.warmup_iters:
             prog = runner.iter / self.warmup_iters
             for group_ind, bias_base in self.bias_base_lr.items():
-                bias_warmup_lr = prog * bias_base + \
-                                 (1 - prog) * self.lr_bias_warmup
-                runner.optimizer.param_groups[group_ind]['lr'] = bias_warmup_lr
+                bias_warmup_lr = (prog + (1 - prog) *
+                                  self.lr_bias_warmup_ratio) * bias_base
+                runner.optimizer.param_groups[group_ind][
+                    'lr'] = bias_warmup_lr
             for group_ind, weight_base in self.weight_base_lr.items():
-                weight_warmup_lr = prog * weight_base + \
-                                   (1 - prog) * self.lr_weight_warmup
+                weight_warmup_lr = (prog + (1 - prog) *
+                                    self.lr_weight_warmup_ratio) * weight_base
                 runner.optimizer.param_groups[group_ind][
                     'lr'] = weight_warmup_lr
             for group_ind, momentum_base in self.base_momentum.items():
-                warmup_momentum = prog * momentum_base + \
-                                  (1 - prog) * self.momentum_warmup
+                warmup_momentum = (prog + (1 - prog) *
+                                   self.momentum_warmup_ratio) * momentum_base
                 runner.optimizer.param_groups[group_ind][
                     'momentum'] = warmup_momentum
 
