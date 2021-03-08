@@ -56,14 +56,13 @@ class StateEMAHook(Hook):
         model = runner.model
         if is_module_wrapper(model):
             model = model.module
-        self.param_ema_buffer = {}
-        self.model_parameters = model.state_dict()
-        for name, value in self.model_parameters.items():
+        self.param_ema_mapping = {}
+        for name, value in model.state_dict().items():
             # "." is not allowed in module's buffer name
             buffer_name = f"ema_{name.replace('.', '_')}"
-            self.param_ema_buffer[name] = buffer_name
+            self.param_ema_mapping[name] = buffer_name
             model.register_buffer(buffer_name, value.data.clone())
-        self.model_buffers = dict(model.named_buffers(recurse=True))
+
         if self.checkpoint is not None:
             runner.resume(self.checkpoint)
 
@@ -71,21 +70,27 @@ class StateEMAHook(Hook):
         """Update ema parameter every self.interval iterations."""
         if (runner.iter + 1) % self.interval != 0:
             return
-        for name, parameter in self.model_parameters.items():
+        model = runner.model
+        if is_module_wrapper(model):
+            model = model.module
+        state_dict = model.state_dict()
+        for name, buffer_name in self.param_ema_mapping.items():
+            online_value = state_dict[name]
+            ema_buffer = state_dict[buffer_name]
+
             momentum = self.momentum * (
                 1 - math.exp(-runner.iter / (self.warm_up * self.interval)))
-            buffer_name = self.param_ema_buffer[name]
-            if parameter.dtype.is_floating_point:
-                buffer_parameter = self.model_buffers[buffer_name]
-                buffer_parameter.mul_(momentum).add_(
-                    parameter.data, alpha=1 - momentum)
+
+            if online_value.dtype.is_floating_point:
+                ema_buffer.mul_(momentum).add_(
+                    online_value.data, alpha=1 - momentum)
             else:
-                self.model_buffers[buffer_name] = parameter.data
+                ema_buffer.data.copy_(online_value.data)
 
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the
         EvalHook."""
-        self._swap_ema_parameters()
+        self._swap_ema_parameters(runner)
 
     def before_train_epoch(self, runner):
         """We recover model's parameter from ema backup after last epoch's
@@ -96,12 +101,18 @@ class StateEMAHook(Hook):
             _, word_size = get_dist_info()
             self.interval = math.ceil(self.nominal_batch_size /
                                       (samples_per_gpu * word_size))
-        self._swap_ema_parameters()
+        self._swap_ema_parameters(runner)
 
-    def _swap_ema_parameters(self):
+    def _swap_ema_parameters(self, runner):
         """Swap the parameter of model with parameter in ema_buffer."""
-        for name, value in self.model_parameters.items():
-            temp = value.data.clone()
-            ema_buffer = self.model_buffers[self.param_ema_buffer[name]]
-            value.data.copy_(ema_buffer.data)
+        model = runner.model
+        if is_module_wrapper(model):
+            model = model.module
+        state_dict = model.state_dict()
+        for name, buffer_name in self.param_ema_mapping.items():
+            online_value = state_dict[name]
+
+            temp = online_value.data.clone()
+            ema_buffer = state_dict[buffer_name]
+            online_value.data.copy_(ema_buffer.data)
             ema_buffer.data.copy_(temp)
