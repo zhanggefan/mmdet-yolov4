@@ -65,6 +65,13 @@ class StateEMAHook(Hook):
 
         if self.checkpoint is not None:
             runner.resume(self.checkpoint)
+        else:
+            cfg_text = runner.meta['config']
+            cfg_dict = dict()
+            exec(cfg_text, cfg_dict)
+            checkpoint = cfg_dict['resume_from']
+            if checkpoint is not None:
+                runner.resume(checkpoint)
 
     def after_train_iter(self, runner):
         """Update ema parameter every self.interval iterations."""
@@ -83,9 +90,9 @@ class StateEMAHook(Hook):
 
             if online_value.dtype.is_floating_point:
                 ema_buffer.mul_(momentum).add_(
-                    online_value.data, alpha=1 - momentum)
+                    online_value.data.float(), alpha=1 - momentum)
             else:
-                ema_buffer.data.copy_(online_value.data)
+                ema_buffer.data.copy_(online_value.data.float())
 
     def after_train_epoch(self, runner):
         """We load parameter values from ema backup to model before the
@@ -111,8 +118,9 @@ class StateEMAHook(Hook):
         state_dict = model.state_dict()
         for name, buffer_name in self.param_ema_mapping.items():
             online_value = state_dict[name]
-
-            temp = online_value.data.clone()
+            online_dtype = online_value.dtype
+            temp = online_value.data.clone().float()
             ema_buffer = state_dict[buffer_name]
-            online_value.data.copy_(ema_buffer.data)
-            ema_buffer.data.copy_(temp)
+            online_value.data.copy_(ema_buffer.data.to(online_dtype))
+            # re-register buffer to force it to be fp32
+            model.register_buffer(buffer_name, temp)
