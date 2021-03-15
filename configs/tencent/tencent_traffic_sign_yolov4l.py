@@ -4,16 +4,16 @@ model = dict(
     type='SingleStageDetector',
     backbone=dict(
         type='DarknetCSP',
-        scale=[['conv', 'bottleneck', 'csp', 'csp', 'csp', 'csp'],
-               [None, 1, 2, 8, 8, 4], [16, 32, 64, 128, 256, 512]],
+        scale=[['conv', 'bottleneck', 'csp', 'csp', 'csp', 'sppv4'],
+               [None, 1, 2, 8, 8, 4], [16, 32, 64, 128, 256, 256]],
         out_indices=[2, 3, 4, 5]),
     neck=dict(
-        type='PACSPFPN',
-        in_channels=[64, 128, 256, 512],
+        type='YOLOV4Neck',
+        in_channels=[64, 128, 256, 256],
         out_channels=[64, 128, 256, 512],
         csp_repetition=2),
     bbox_head=dict(
-        type='YOLOV4Head',
+        type='YOLOCSPHead',
         anchor_generator=dict(
             type='YOLOV4AnchorGenerator',
             base_sizes=[
@@ -28,16 +28,15 @@ model = dict(
         in_channels=[64, 128, 256, 512],
         class_agnostic=True,
         loss_conf=dict(
-            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0)))
-
-train_cfg = dict(
-    num_obj_per_image=3, conf_level_balance_weight=[4.0, 4.0, 1.0, 0.4])
-test_cfg = dict(
-    min_bbox_size=0,
-    nms_pre=-1,
-    score_thr=0.3,
-    nms=dict(type='nms', iou_threshold=0.1),
-    max_per_img=300)
+            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0)),
+    train_cfg=dict(
+        num_obj_per_image=3, conf_level_balance_weight=[4.0, 4.0, 1.0, 0.4]),
+    test_cfg=dict(
+        min_bbox_size=0,
+        nms_pre=-1,
+        score_thr=0.3,
+        nms=dict(type='nms', iou_threshold=0.1),
+        max_per_img=300))
 
 dataset_type = 'TrafficSignDataset'
 data_root = 'data/tencent/det/'
