@@ -1907,6 +1907,7 @@ class HueSaturationValueJitter(object):
 
     def __call__(self, results):
         for key in results.get('img_fields', []):
+            results[key] = np.ascontiguousarray(results[key])
             img = results[key]
             # random gains
             r = np.array([random.uniform(-1., 1.) for _ in range(3)]) * \
