@@ -359,6 +359,60 @@ class CocoDataset(CustomDataset):
         result_files = self.results2json(results, jsonfile_prefix)
         return result_files, tmp_dir
 
+    def get_ann_info_test(self, idx):
+        img_id = self.data_infos[idx]['id']
+        ann_ids = self.coco.get_ann_ids(img_ids=[img_id])
+        ann_info = self.coco.load_anns(ann_ids)
+
+        img_info = self.data_infos[idx]
+
+        gt_bboxes = []
+        gt_labels = []
+        gt_attrs = dict(ignore=[], iscrowd=[], area=[])
+        gt_masks_ann = []
+        for i, ann in enumerate(ann_info):
+            iscrowd = ann.get('iscrowd', False)
+            ignore = ann.get('ignore', False)
+            ignore = ignore or iscrowd
+            ignore = ignore or ann['category_id'] not in self.cat_ids
+            x1, y1, w, h = ann['bbox']
+            # inter_w = max(0, min(x1 + w, img_info['width']) - max(x1, 0))
+            # inter_h = max(0, min(y1 + h, img_info['height']) - max(y1, 0))
+            # ignore = ignore or inter_w * inter_h == 0
+            # ignore = ignore or ann.get('area', w * h) <= 0 or w < 1 or h < 1
+            gt_attrs['ignore'].append(ignore)
+            gt_attrs['iscrowd'].append(iscrowd)
+            gt_attrs['area'].append(ann['area'])
+
+            bbox = [x1, y1, x1 + w, y1 + h]
+            gt_bboxes.append(bbox)
+            gt_labels.append(self.cat2label[ann['category_id']])
+            gt_masks_ann.append(ann.get('segmentation', None))
+
+        if gt_bboxes:
+            gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
+            gt_labels = np.array(gt_labels, dtype=np.int64)
+            gt_attrs['ignore'] = np.array(gt_attrs['ignore'], dtype=np.bool)
+            gt_attrs['iscrowd'] = np.array(gt_attrs['iscrowd'], dtype=np.bool)
+            gt_attrs['area'] = np.array(gt_attrs['area'], dtype=np.float32)
+        else:
+            gt_bboxes = np.zeros((0, 4), dtype=np.float32)
+            gt_labels = np.array([], dtype=np.int64)
+            gt_attrs['ignore'] = np.array([], dtype=np.bool)
+            gt_attrs['iscrowd'] = np.array([], dtype=np.bool)
+            gt_attrs['area'] = np.array([], dtype=np.float32)
+
+        seg_map = img_info['filename'].replace('jpg', 'png')
+
+        ann = dict(
+            gt_bboxes=gt_bboxes,
+            gt_labels=gt_labels,
+            gt_attrs=gt_attrs,
+            masks=gt_masks_ann,
+            seg_map=seg_map)
+
+        return ann
+
     def evaluate(self,
                  results,
                  metric='bbox',
@@ -413,10 +467,18 @@ class CocoDataset(CustomDataset):
             if not isinstance(metric_items, list):
                 metric_items = [metric_items]
         if 'fast-bbox' in metrics:
+            from ..core.evaluation import eval_map_flexible
             assert len(metrics) == 1, \
                 'fast-bbox evaluation can only be used alone!'
-            return super(CocoDataset, self).evaluate(
-                results, metric='mAP', logger=logger, iou_thr=list(iou_thrs))
+            annotations = [self.get_ann_info_test(i) for i in range(len(self))]
+            mean_ap, _ = eval_map_flexible(
+                results,
+                annotations,
+                scale_ranges=((0, 32), (32, 96), (96, 10000)),
+                iou_thrs=[0.5 + 0.05 * x for x in range(10)],
+                dataset=self.CLASSES,
+                logger=logger)
+            return mean_ap
 
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 

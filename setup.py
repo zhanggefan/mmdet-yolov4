@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 import os
-from setuptools import find_packages, setup
+from setuptools import Extension, find_packages, setup
 
+import numpy
 import torch
+from Cython.Build import cythonize
 from torch.utils.cpp_extension import (BuildExtension, CppExtension,
                                        CUDAExtension)
 
@@ -160,7 +162,15 @@ if __name__ == '__main__':
                 name='mish_cuda_ext',
                 module='mmdet.ops.mish_cuda',
                 sources=['src/kernel/mish_cpu.cc', 'src/mish.cc'],
-                sources_cuda=['src/kernel/mish_cuda.cu'])
+                sources_cuda=['src/kernel/mish_cuda.cu']), *cythonize([
+                    Extension(
+                        'mmdet.ops.eval_utils.match',
+                        sources=['mmdet/ops/eval_utils/match/match_coco.pyx'],
+                        include_dirs=[numpy.get_include()],
+                        library_dirs=[],
+                        libraries=[],
+                    )
+                ])
         ],
         cmdclass={'build_ext': BuildExtension},
         zip_safe=False)

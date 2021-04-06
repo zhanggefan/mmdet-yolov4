@@ -11,21 +11,22 @@ from mmcv.runner import force_fp32
 from mmdet.core import (build_anchor_generator, build_assigner,
                         build_bbox_coder, build_sampler, multi_apply,
                         multiclass_nms)
-from ..builder import HEADS, build_loss
+from ..builder import HEADS, LOSSES, build_loss
 from ..losses import reduce_loss
 from .base_dense_head import BaseDenseHead
 from .dense_test_mixins import BBoxTestMixin
 
 
+@LOSSES.register_module()
 class SoftFocalLoss(nn.Module):
     # Wraps focal loss around existing loss_fcn()
     # i.e. criteria = FocalLoss(nn.BCEWithLogitsLoss(), gamma=1.5)
-    def __init__(self, loss_fcn, gamma=1.5, alpha=0.25):
+    def __init__(self, raw_loss, gamma=1.5, alpha=0.25):
         super(SoftFocalLoss, self).__init__()
-        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss()
+        self.loss_fcn = build_loss(raw_loss)  # must be nn.BCEWithLogitsLoss()
         self.gamma = gamma
         self.alpha = alpha
-        self.reduction = loss_fcn.reduction
+        self.reduction = raw_loss.reduction
         # required to apply FL to each element
         self.loss_fcn.reduction = 'none'
 
