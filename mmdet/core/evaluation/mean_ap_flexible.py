@@ -1,17 +1,17 @@
-from collections import OrderedDict
+# from collections import OrderedDict
 
 import numpy as np
-import tqdm
-from mmcv.utils import Registry
+from mmcv.utils import Registry, build_from_cfg
+from mmcv.utils.progressbar import track_iter_progress
 
+from mmdet.ops.eval_utils.iou import iou_coco
 from mmdet.ops.eval_utils.match import match_coco
-from .bbox_overlaps import bbox_overlaps
 from .mean_ap import average_precision
 
 EVAL_BREAKDOWN = Registry('2D Evaluation Breakdown')
 
 
-class NoBreakDown:
+class NoBreakdown:
 
     def __init__(self, classes, apply_to=None):
         if apply_to is None:
@@ -42,13 +42,16 @@ class NoBreakDown:
 
 
 @EVAL_BREAKDOWN.register_module()
-class ScaleBreakDown(NoBreakDown):
+class ScaleBreakdown(NoBreakdown):
 
     def __init__(self, scale_ranges, classes, apply_to=None):
-        super(ScaleBreakDown, self).__init__(classes, apply_to)
-        self.names = [f'S{smin}-{smax}' for smin, smax in scale_ranges]
-        self.area_ranges = [(smin * smin, smax * smax)
-                            for smin, smax in scale_ranges]
+        super(ScaleBreakdown, self).__init__(classes, apply_to)
+        self.names = []
+        self.area_ranges = []
+        for k in scale_ranges:
+            self.names.append(k)
+            smin, smax = scale_ranges[k]
+            self.area_ranges.append((smin * smin, smax * smax))
 
     def breakdown_flags(self, boxes, attrs=None):
         num_ranges = len(self.area_ranges)
@@ -68,10 +71,10 @@ class ScaleBreakDown(NoBreakDown):
 
 def statistics_single(det, anno, iou_thrs, breakdown=[]):
     """Check if detected bboxes are true positive or false positive."""
-    tp_score = []
-    breakdown_info = []
+    tp_score_info = []
 
     num_cls = len(det)
+    num_iou_thrs = len(iou_thrs)
 
     gt_bboxes = anno['gt_bboxes']
     gt_labels = anno['gt_labels']
@@ -79,6 +82,8 @@ def statistics_single(det, anno, iou_thrs, breakdown=[]):
 
     for cls in range(num_cls):
         # prepare detections
+        cls_tp_score_info = []
+
         cls_det_bboxes = det[cls][:, :4]
         cls_det_scores = det[cls][:, 4]
         sort_ind = cls_det_scores.argsort()[::-1]
@@ -108,8 +113,7 @@ def statistics_single(det, anno, iou_thrs, breakdown=[]):
         num_bkd = cls_gt_bkd.shape[0]
 
         # all detections are false positive by default
-        cls_tp_score = np.zeros((cls_num_dets, 2), dtype=np.float32)
-        cls_tp_score[:, -1] = cls_det_scores
+        cls_tp = np.zeros((num_iou_thrs, cls_num_dets), dtype=np.bool)
 
         # calculate num gt (not considering ignored gt boxes)
         cls_gt_count = []
@@ -118,116 +122,121 @@ def statistics_single(det, anno, iou_thrs, breakdown=[]):
 
         # handling empty det or empty gt
         if (cls_num_gts + cls_num_ignore_gts) == 0 or cls_num_dets == 0:
-            tp_score += [cls_tp_score] * len(iou_thrs)
-            breakdown_info += [[(cls_bkd_names[bkd_idx], cls_det_bkd[bkd_idx],
-                                 cls_gt_count[bkd_idx])
-                                for bkd_idx in range(num_bkd)]] * len(iou_thrs)
-            continue
-
-        ious = np.empty((cls_num_dets, cls_num_gts + cls_num_ignore_gts),
-                        dtype=np.float32)
-        ious[:,
-             cls_gt_crowd_msk] = bbox_overlaps(cls_det_bboxes,
-                                               cls_gt_bboxes[cls_gt_crowd_msk],
-                                               'iof')
-        ious[:, ~cls_gt_crowd_msk] = bbox_overlaps(
-            cls_det_bboxes, cls_gt_bboxes[~cls_gt_crowd_msk])
-
-        matched_gt_idx = match_coco(ious, np.array(iou_thrs, dtype=np.float32),
-                                    cls_gt_ignore_msk.astype(np.bool),
-                                    cls_gt_crowd_msk.astype(np.bool))
-
-        for iou_matched_gt_idx in matched_gt_idx:
-            cls_tp_score[:, 0] = 0
-            cls_tp_score[iou_matched_gt_idx > -1, 0] = 1
-            tp_score.append(cls_tp_score.copy())
-
-            breakdown_info.append([])
             for bkd_idx in range(num_bkd):
-                _msk_fp = (cls_det_bkd[bkd_idx] & (iou_matched_gt_idx == -1))
-                _msk_tp = (
-                    cls_gt_bkd[bkd_idx][iou_matched_gt_idx] &
-                    (iou_matched_gt_idx > -1))
-                breakdown_info[-1].append(
-                    (cls_bkd_names[bkd_idx], (_msk_fp | _msk_tp),
-                     cls_gt_count[bkd_idx]))
+                cls_tp_score_info.append(
+                    (cls_bkd_names[bkd_idx], cls_gt_count[bkd_idx],
+                     cls_det_scores, cls_tp,
+                     cls_det_bkd[bkd_idx:bkd_idx + 1].repeat(
+                         num_iou_thrs, axis=0)))
+        else:
+            ious = iou_coco(cls_det_bboxes, cls_gt_bboxes, cls_gt_crowd_msk)
 
-    return tp_score, breakdown_info
+            for bkd_idx in range(num_bkd):
+                cls_gt_bkd_msk = ((~cls_gt_ignore_msk) & (cls_gt_bkd[bkd_idx]))
+                matched_gt_idx = match_coco(
+                    ious, np.array(iou_thrs, dtype=np.float32),
+                    (~cls_gt_bkd_msk), cls_gt_crowd_msk.astype(np.bool))
+
+                cls_tp[...] = False
+                cls_tp[matched_gt_idx > -1] = True
+
+                _msk_fp = (
+                    cls_det_bkd[bkd_idx:bkd_idx + 1] & (matched_gt_idx == -1))
+                _msk_tp = ((cls_gt_bkd_msk[matched_gt_idx]) &
+                           (matched_gt_idx > -1))
+                cls_tp_score_info.append(
+                    (cls_bkd_names[bkd_idx], cls_gt_count[bkd_idx],
+                     cls_det_scores, cls_tp, (_msk_fp | _msk_tp)))
+
+        tp_score_info.append(cls_tp_score_info)
+
+    return tp_score_info
 
 
 def eval_map_flexible(det_results,
                       annotations,
-                      scale_ranges=None,
                       iou_thrs=[0.5],
-                      dataset=None,
+                      breakdown=[],
+                      classes=None,
                       logger=None,
                       nproc=4):
     assert len(det_results) == len(annotations)
 
     num_imgs = len(det_results)
-    num_classes = len(det_results[0])  # positive class num
-    num_ious = len(iou_thrs)
+    # num_classes = len(det_results[0])
+    # num_ious = len(iou_thrs)
 
-    breakdown = [NoBreakDown(dataset)]
-    if scale_ranges is not None:
-        breakdown.append(ScaleBreakDown(scale_ranges, dataset))
+    for bkd_idx in range(len(breakdown)):
+        breakdown[bkd_idx] = build_from_cfg(
+            breakdown[bkd_idx],
+            EVAL_BREAKDOWN,
+            default_args=dict(classes=classes))
+    breakdown.insert(0, NoBreakdown(classes))
+    tp_score_infos = []
 
-    tp_scores, breakdown_infos = [], []
+    for det_result, annotation in zip(
+            track_iter_progress(det_results), annotations):
+        tp_score_infos.append(
+            statistics_single(det_result, annotation, iou_thrs, breakdown))
 
-    for det_result, annotation in zip(tqdm.tqdm(det_results), annotations):
-        statistics = statistics_single(det_result, annotation, iou_thrs,
-                                       breakdown)
-        tp_scores.append(statistics[0])
-        breakdown_infos.append(statistics[1])
+    for img in range(1, num_imgs):
+        for cls, cls_0_tp_score_infos in enumerate(tp_score_infos[0]):
+            for bkd, bdk_cls_0_tp_score_infos in enumerate(
+                    cls_0_tp_score_infos):
+                (_name, _num_gt, _score, _tp, _bkd_msk) = \
+                    tp_score_infos[img][cls][bkd]
+                if isinstance(bdk_cls_0_tp_score_infos, tuple):
+                    bdk_cls_0_tp_score_infos = list(bdk_cls_0_tp_score_infos)
+                    bdk_cls_0_tp_score_infos[2] = [bdk_cls_0_tp_score_infos[2]]
+                    bdk_cls_0_tp_score_infos[3] = [bdk_cls_0_tp_score_infos[3]]
+                    bdk_cls_0_tp_score_infos[4] = [bdk_cls_0_tp_score_infos[4]]
+                    tp_score_infos[0][cls][bkd] = bdk_cls_0_tp_score_infos
+                assert bdk_cls_0_tp_score_infos[0] == _name
+                bdk_cls_0_tp_score_infos[1] += _num_gt
+                bdk_cls_0_tp_score_infos[2].append(_score)
+                bdk_cls_0_tp_score_infos[3].append(_tp)
+                bdk_cls_0_tp_score_infos[4].append(_bkd_msk)
 
-    tp_scores = [np.concatenate(x, axis=0) for x in zip(*tp_scores)]
-
-    breakdown_dicts = []
-
-    for cls_iou in range(num_classes * num_ious):
-        breakdown_dict = OrderedDict()
-        for img in range(num_imgs):
-            for name, mask, gt_count in breakdown_infos[img][cls_iou]:
-                if name not in breakdown_dict:
-                    breakdown_dict[name] = [[mask], gt_count]
-                else:
-                    breakdown_dict[name][0].append(mask)
-                    breakdown_dict[name][1] += gt_count
-        for name in breakdown_dict:
-            breakdown_dict[name][0] = np.concatenate(
-                breakdown_dict[name][0], axis=0)
-        breakdown_dicts.append(breakdown_dict)
+    tp_score_infos = tp_score_infos[0]
 
     map50, map75, map5095, smap, mmap, lmap = [], [], [], [], [], []
-    for cls_iou, (tp_score, breakdown_dict) in enumerate(
-            zip(tp_scores, breakdown_dicts)):
-        rank = tp_score[:, 1].argsort()[::-1]
-        tp = tp_score[:, 0][rank]
-        # classname = dataset[cls_iou // num_ious]
-        iou_thr = iou_thrs[cls_iou % num_ious]
-        for bkd_name, (mask, num_gt) in breakdown_dict.items():
-            tpcumsum = tp[mask[rank]].cumsum()
-            num_dets = len(tpcumsum)
-            recall = tpcumsum / max(num_gt, 1e-7)
-            precision = tpcumsum / np.arange(1, num_dets + 1)
-            m_ap = average_precision(recall, precision)
-            # max_recall = recall.max() if len(recall) > 0 else 0
 
-            # print(classname, iou_thr, bkd_name, num_dets, num_gt, max_recall,
-            #       m_ap)
-            if num_gt > 0:
-                if bkd_name == 'All':
-                    if iou_thr == 0.5:
-                        map50.append(m_ap)
-                    elif iou_thr == 0.75:
-                        map75.append(m_ap)
-                    map5095.append(m_ap)
-                elif bkd_name == 'S0-32':
-                    smap.append(m_ap)
-                elif bkd_name == 'S32-96':
-                    mmap.append(m_ap)
-                elif bkd_name == 'S96-10000':
-                    lmap.append(m_ap)
+    eval_result_list = []
+
+    for cls, cls_tp_score_infos in enumerate(tp_score_infos):
+        for bkd, bdk_cls_tp_score_infos in enumerate(cls_tp_score_infos):
+            cls_name = classes[cls]
+            bkd_name = bdk_cls_tp_score_infos[0]
+            num_gt = bdk_cls_tp_score_infos[1]
+            scores = np.concatenate(bdk_cls_tp_score_infos[2], axis=0)
+            tp = np.concatenate(bdk_cls_tp_score_infos[3], axis=1)
+            bkd_msk = np.concatenate(bdk_cls_tp_score_infos[4], axis=1)
+            rank = scores.argsort()[::-1]
+            scores = scores[rank]
+            tp = tp[:, rank]
+            bkd_msk = bkd_msk[:, rank]
+            for iou_thr_idx, iou_thr in enumerate(iou_thrs):
+                tpcumsum = tp[iou_thr_idx, bkd_msk[iou_thr_idx]].cumsum()
+                num_dets = len(tpcumsum)
+                recall = tpcumsum / max(num_gt, 1e-7)
+                precision = tpcumsum / np.arange(1, num_dets + 1)
+                m_ap = average_precision(recall, precision)
+                max_recall = recall.max() if len(recall) > 0 else 0
+                eval_result_list.append((cls_name, bkd_name, iou_thr, num_dets,
+                                         num_gt, max_recall, m_ap))
+                if num_gt > 0:
+                    if bkd_name == 'All':
+                        if iou_thr == 0.5:
+                            map50.append(m_ap)
+                        elif iou_thr == 0.75:
+                            map75.append(m_ap)
+                        map5095.append(m_ap)
+                    elif bkd_name == 'Scale_S':
+                        smap.append(m_ap)
+                    elif bkd_name == 'Scale_M':
+                        mmap.append(m_ap)
+                    elif bkd_name == 'Scale_L':
+                        lmap.append(m_ap)
 
     print('map50:', sum(map50) / len(map50))
     print('map75:', sum(map75) / len(map75))

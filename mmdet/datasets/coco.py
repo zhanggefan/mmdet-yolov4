@@ -474,9 +474,16 @@ class CocoDataset(CustomDataset):
             mean_ap, _ = eval_map_flexible(
                 results,
                 annotations,
-                scale_ranges=((0, 32), (32, 96), (96, 10000)),
                 iou_thrs=[0.5 + 0.05 * x for x in range(10)],
-                dataset=self.CLASSES,
+                breakdown=[
+                    dict(
+                        type='ScaleBreakdown',
+                        scale_ranges=dict(
+                            Scale_S=(0, 32),
+                            Scale_M=(32, 96),
+                            Scale_L=(96, 10000)))
+                ],
+                classes=self.CLASSES,
                 logger=logger)
             return mean_ap
 
