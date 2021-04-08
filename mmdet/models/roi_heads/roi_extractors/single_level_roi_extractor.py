@@ -16,7 +16,7 @@ class SingleRoIExtractor(BaseRoIExtractor):
     Args:
         roi_layer (dict): Specify RoI layer type and arguments.
         out_channels (int): Output channels of RoI layers.
-        featmap_strides (int): Strides of input feature maps.
+        featmap_strides (List[int]): Strides of input feature maps.
         finest_scale (int): Scale threshold of mapping to level 0. Default: 56.
     """
 
@@ -96,6 +96,12 @@ class SingleRoIExtractor(BaseRoIExtractor):
                 roi_feats_t = self.roi_layers[i](feats[i], rois_)
                 roi_feats[inds] = roi_feats_t
             else:
+                # Sometimes some pyramid levels will not be used for RoI
+                # feature extraction and this will cause an incomplete
+                # computation graph in one GPU, which is different from those
+                # in other GPUs and will cause a hanging error.
+                # Therefore, we add it to ensure each feature pyramid is
+                # included in the computation graph to avoid runtime bugs.
                 roi_feats += sum(
                     x.view(-1)[0]
                     for x in self.parameters()) * 0. + feats[i].sum() * 0.
