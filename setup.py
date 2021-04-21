@@ -169,6 +169,13 @@ if __name__ == '__main__':
                         include_dirs=[numpy.get_include()],
                         library_dirs=[],
                         libraries=[],
+                    ),
+                    Extension(
+                        'mmdet.ops.eval_utils.iou',
+                        sources=['mmdet/ops/eval_utils/iou/iou_coco.pyx'],
+                        include_dirs=[numpy.get_include()],
+                        library_dirs=[],
+                        libraries=[],
                     )
                 ])
         ],

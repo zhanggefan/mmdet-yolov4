@@ -474,7 +474,7 @@ class CocoDataset(CustomDataset):
             assert len(metrics) == 1, \
                 'fast-bbox evaluation can only be used alone!'
             annotations = [self.get_ann_info_test(i) for i in range(len(self))]
-            mean_ap, _ = eval_map_flexible(
+            eval_results = eval_map_flexible(
                 results,
                 annotations,
                 iou_thrs=[0.5 + 0.05 * x for x in range(10)],
@@ -488,7 +488,7 @@ class CocoDataset(CustomDataset):
                 ],
                 classes=self.CLASSES,
                 logger=logger)
-            return mean_ap
+            return eval_results
 
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 
