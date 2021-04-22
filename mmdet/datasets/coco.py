@@ -19,7 +19,6 @@ from .custom import CustomDataset
 
 @DATASETS.register_module()
 class CocoDataset(CustomDataset):
-
     CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
                'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
@@ -486,7 +485,20 @@ class CocoDataset(CustomDataset):
                             Scale_M=(32, 96),
                             Scale_L=(96, 10000)))
                 ],
+                report_config=[
+                    ('map', lambda x: x['breakdown'] == 'All'),
+                    ('map50', lambda x: x['iou_threshold'] == 0.5 and x[
+                        'breakdown'] == 'All'),
+                    ('map75', lambda x: x['iou_threshold'] == 0.75 and x[
+                        'breakdown'] == 'All'),
+                    ('s_map', lambda x: x['breakdown'] == 'Scale_S'),
+                    ('m_map', lambda x: x['breakdown'] == 'Scale_M'),
+                    ('l_map', lambda x: x['breakdown'] == 'Scale_L')
+                ],
                 classes=self.CLASSES,
+                iou_calculator=dict(type='IOU2DCoCo'),
+                matcher=dict(type='MatcherCoCo'),
+                nproc=-1,
                 logger=logger)
             return eval_results
 
