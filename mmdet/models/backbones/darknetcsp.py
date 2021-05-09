@@ -1,11 +1,11 @@
-import logging
+import warnings
 
 import torch
 import torch.nn as nn
-from mmcv.cnn import ConvModule, constant_init, kaiming_init
+from mmcv.cnn import ConvModule
 from mmcv.cnn.bricks.activation import build_activation_layer
 from mmcv.cnn.bricks.norm import build_norm_layer
-from mmcv.runner import load_checkpoint
+from mmcv.runner import BaseModule
 from torch.nn.modules.batchnorm import _BatchNorm
 
 from ..builder import BACKBONES
@@ -34,7 +34,7 @@ class Conv(ConvModule):
             act_cfg=act_cfg)
 
 
-class Bottleneck(nn.Module):
+class Bottleneck(BaseModule):
 
     def __init__(self,
                  in_channels,
@@ -42,8 +42,9 @@ class Bottleneck(nn.Module):
                  shortcut=True,
                  groups=1,
                  expansion=0.5,
+                 init_cfg=None,
                  **kwargs):
-        super(Bottleneck, self).__init__()
+        super(Bottleneck, self).__init__(init_cfg)
         hidden_channels = int(out_channels * expansion)  # hidden channels
         self.conv1 = Conv(
             in_channels, hidden_channels, kernel_size=1, **kwargs)
@@ -62,7 +63,7 @@ class Bottleneck(nn.Module):
             return self.conv2(self.conv1(x))
 
 
-class BottleneckCSP(nn.Module):
+class BottleneckCSP(BaseModule):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self,
                  in_channels,
@@ -72,8 +73,9 @@ class BottleneckCSP(nn.Module):
                  groups=1,
                  expansion=0.5,
                  csp_act_cfg=dict(type='Mish'),
+                 init_cfg=None,
                  **kwargs):
-        super(BottleneckCSP, self).__init__()
+        super(BottleneckCSP, self).__init__(init_cfg)
         hidden_channels = int(out_channels * expansion)  # hidden channels
         self.conv1 = Conv(
             in_channels, hidden_channels, kernel_size=1, **kwargs)
@@ -106,7 +108,7 @@ class BottleneckCSP(nn.Module):
         return self.conv4(self.csp_act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
-class BottleneckCSP2(nn.Module):
+class BottleneckCSP2(BaseModule):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self,
                  in_channels,
@@ -115,8 +117,9 @@ class BottleneckCSP2(nn.Module):
                  shortcut=False,
                  groups=1,
                  csp_act_cfg=dict(type='Mish'),
+                 init_cfg=None,
                  **kwargs):
-        super(BottleneckCSP2, self).__init__()
+        super(BottleneckCSP2, self).__init__(init_cfg)
         hidden_channels = int(out_channels)  # hidden channels
         self.conv1 = Conv(
             in_channels, hidden_channels, kernel_size=1, **kwargs)
@@ -149,14 +152,15 @@ class BottleneckCSP2(nn.Module):
         return self.conv3(self.csp_act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
-class SPPV5(nn.Module):
+class SPPV5(BaseModule):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self,
                  in_channels,
                  out_channels,
                  pooling_kernel_size=(5, 9, 13),
+                 init_cfg=None,
                  **kwargs):
-        super(SPPV5, self).__init__()
+        super(SPPV5, self).__init__(init_cfg)
         hidden_channels = in_channels // 2  # hidden channels
         self.conv1 = Conv(
             in_channels, hidden_channels, kernel_size=1, **kwargs)
@@ -176,7 +180,7 @@ class SPPV5(nn.Module):
             torch.cat([x] + [maxpool(x) for maxpool in self.maxpools], 1))
 
 
-class SPPV4(nn.Module):
+class SPPV4(BaseModule):
     # CSP SPP https://github.com/WongKinYiu/CrossStagePartialNetworks
     def __init__(self,
                  in_channels,
@@ -184,8 +188,9 @@ class SPPV4(nn.Module):
                  expansion=0.5,
                  pooling_kernel_size=(5, 9, 13),
                  csp_act_cfg=dict(type='Mish'),
+                 init_cfg=None,
                  **kwargs):
-        super(SPPV4, self).__init__()
+        super(SPPV4, self).__init__(init_cfg)
         hidden_channels = int(2 * out_channels * expansion)  # hidden channels
         self.conv1 = Conv(
             in_channels, hidden_channels, kernel_size=1, **kwargs)
@@ -223,17 +228,19 @@ class SPPV4(nn.Module):
         return self.conv7(self.csp_act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
-class Focus(nn.Module):
+class Focus(BaseModule):
     # Focus wh information into c-space
-    # Implement with ordinary Conv2d with doubled kernel/padding size & stride 2
+    # Implement with ordinary Conv2d with
+    # doubled kernel/padding size & stride 2
     def __init__(self,
                  in_channels,
                  out_channels,
                  kernel_size=1,
                  stride=1,
                  groups=1,
+                 init_cfg=None,
                  **kwargs):
-        super(Focus, self).__init__()
+        super(Focus, self).__init__(init_cfg)
         padding = kernel_size // 2
         kernel_size *= 2
         padding *= 2
@@ -251,10 +258,15 @@ class Focus(nn.Module):
         return self.conv(x)
 
 
-class CSPStage(nn.Module):
+class CSPStage(BaseModule):
 
-    def __init__(self, in_channels, out_channels, repetition, **kwargs):
-        super(CSPStage, self).__init__()
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 repetition,
+                 init_cfg=None,
+                 **kwargs):
+        super(CSPStage, self).__init__(init_cfg)
         self.conv_downscale = Conv(
             in_channels, out_channels, kernel_size=3, stride=2, **kwargs)
         self.conv_csp = BottleneckCSP(out_channels, out_channels, repetition,
@@ -264,10 +276,15 @@ class CSPStage(nn.Module):
         return self.conv_csp(self.conv_downscale(x))
 
 
-class SPPV5Stage(nn.Module):
+class SPPV5Stage(BaseModule):
 
-    def __init__(self, in_channels, out_channels, repetition, **kwargs):
-        super(SPPV5Stage, self).__init__()
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 repetition,
+                 init_cfg=None,
+                 **kwargs):
+        super(SPPV5Stage, self).__init__(init_cfg)
         self.conv_downscale = Conv(
             in_channels, out_channels, kernel_size=3, stride=2, **kwargs)
         self.spp = SPPV5(
@@ -279,10 +296,15 @@ class SPPV5Stage(nn.Module):
         return self.conv_csp(self.spp(self.conv_downscale(x)))
 
 
-class SPPV4Stage(nn.Module):
+class SPPV4Stage(BaseModule):
 
-    def __init__(self, in_channels, out_channels, repetition, **kwargs):
-        super(SPPV4Stage, self).__init__()
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 repetition,
+                 init_cfg=None,
+                 **kwargs):
+        super(SPPV4Stage, self).__init__(init_cfg)
         self.conv_downscale = Conv(
             in_channels, out_channels * 2, kernel_size=3, stride=2, **kwargs)
         self.conv_csp = BottleneckCSP(out_channels * 2, out_channels * 2,
@@ -294,10 +316,15 @@ class SPPV4Stage(nn.Module):
         return self.spp(self.conv_csp(self.conv_downscale(x)))
 
 
-class BottleneckStage(nn.Module):
+class BottleneckStage(BaseModule):
 
-    def __init__(self, in_channels, out_channels, repetition, **kwargs):
-        super(BottleneckStage, self).__init__()
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 repetition,
+                 init_cfg=None,
+                 **kwargs):
+        super(BottleneckStage, self).__init__(init_cfg)
         self.conv_downscale = Conv(
             in_channels, out_channels, kernel_size=3, stride=2, **kwargs)
         self.conv_bottleneck = Bottleneck(out_channels, out_channels,
@@ -308,7 +335,7 @@ class BottleneckStage(nn.Module):
 
 
 @BACKBONES.register_module()
-class DarknetCSP(nn.Module):
+class DarknetCSP(BaseModule):
     """Darknet backbone.
 
     Args:
@@ -359,8 +386,10 @@ class DarknetCSP(nn.Module):
                      type='BN', requires_grad=True, eps=0.001, momentum=0.03),
                  act_cfg=dict(type='Mish'),
                  csp_act_cfg=dict(type='Mish'),
-                 norm_eval=False):
-        super(DarknetCSP, self).__init__()
+                 norm_eval=False,
+                 pretrained=None,
+                 init_cfg=None):
+        super(DarknetCSP, self).__init__(init_cfg)
 
         if isinstance(scale, str):
             if scale not in self.arch_settings:
@@ -372,7 +401,11 @@ class DarknetCSP(nn.Module):
         self.out_indices = out_indices
         self.frozen_stages = frozen_stages
 
-        cfg = dict(norm_cfg=norm_cfg, act_cfg=act_cfg, csp_act_cfg=csp_act_cfg)
+        cfg = dict(
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            csp_act_cfg=csp_act_cfg,
+            init_cfg=init_cfg)
 
         self.layers = []
         cin = 3
@@ -398,9 +431,25 @@ class DarknetCSP(nn.Module):
 
         self.norm_eval = norm_eval
 
-        self._freeze_stages()
-
         self.fp16_enabled = False
+
+        assert not (init_cfg and pretrained), \
+            'init_cfg and pretrained cannot be setting at the same time'
+        if isinstance(pretrained, str):
+            warnings.warn('DeprecationWarning: pretrained is a deprecated, '
+                          'please use "init_cfg" instead')
+            self.init_cfg = dict(type='Pretrained', checkpoint=pretrained)
+        elif pretrained is None:
+            if init_cfg is None:
+                self.init_cfg = [
+                    dict(type='Kaiming', layer='Conv2d'),
+                    dict(
+                        type='Constant',
+                        val=1,
+                        layer=['_BatchNorm', 'GroupNorm'])
+                ]
+        else:
+            raise TypeError('pretrained must be a str or None')
 
     def forward(self, x):
         outs = []
@@ -411,19 +460,6 @@ class DarknetCSP(nn.Module):
                 outs.append(x)
 
         return tuple(outs)
-
-    def init_weights(self, pretrained=None):
-        if isinstance(pretrained, str):
-            logger = logging.getLogger()
-            load_checkpoint(self, pretrained, strict=False, logger=logger)
-        elif pretrained is None:
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    kaiming_init(m)
-                elif isinstance(m, (_BatchNorm, nn.GroupNorm)):
-                    constant_init(m, 1)
-        else:
-            raise TypeError('pretrained must be a str or None')
 
     def _freeze_stages(self):
         if self.frozen_stages >= 0:

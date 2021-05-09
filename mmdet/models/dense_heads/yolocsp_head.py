@@ -101,8 +101,10 @@ class YOLOCSPHead(BaseDenseHead, BBoxTestMixin):
             loss_bbox=dict(type='GIoULoss', loss_weight=3.2),
             class_agnostic=False,
             train_cfg=None,
-            test_cfg=None):
-        super(YOLOCSPHead, self).__init__()
+            test_cfg=None,
+            init_cfg=None):
+
+        super(YOLOCSPHead, self).__init__(init_cfg)
         # Check params
         assert (len(in_channels) == len(featmap_strides))
 

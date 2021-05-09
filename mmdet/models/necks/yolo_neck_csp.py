@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import xavier_init
+from mmcv.runner import BaseModule
 
 from ..backbones.darknetcsp import BottleneckCSP, BottleneckCSP2, Conv
 from ..builder import NECKS
 
 
 @NECKS.register_module()
-class YOLOV4Neck(nn.Module):
+class YOLOV4Neck(BaseModule):
     """Path Aggregation Network for Instance Segmentation.
 
     This is an implementation of the `PAFPN in Path Aggregation Network
@@ -48,9 +48,17 @@ class YOLOV4Neck(nn.Module):
                      type='BN', requires_grad=True, eps=0.001, momentum=0.03),
                  act_cfg=dict(type='Mish'),
                  csp_act_cfg=dict(type='Mish'),
-                 upsample_cfg=dict(mode='nearest')):
+                 upsample_cfg=dict(mode='nearest'),
+                 init_cfg=None):
 
-        super(YOLOV4Neck, self).__init__()
+        if init_cfg is None:
+            init_cfg = [
+                dict(type='Xavier', distribution='uniform', layer='Conv2d'),
+                dict(
+                    type='Constant', val=1, layer=['_BatchNorm', 'GroupNorm'])
+            ]
+
+        super(YOLOV4Neck, self).__init__(init_cfg)
 
         assert isinstance(in_channels, list)
         self.in_channels = in_channels
@@ -77,7 +85,11 @@ class YOLOV4Neck(nn.Module):
         self.start_level = start_level
         self.end_level = end_level
 
-        cfg = dict(norm_cfg=norm_cfg, act_cfg=act_cfg, csp_act_cfg=csp_act_cfg)
+        cfg = dict(
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            csp_act_cfg=csp_act_cfg,
+            init_cfg=init_cfg)
 
         # 1x1 convs to shrink channels count before upsample and concat
         self.pre_upsample_convs = nn.ModuleList()
@@ -173,13 +185,6 @@ class YOLOV4Neck(nn.Module):
                 **cfg)
             self.out_convs.append(out_conv)
 
-    # default init_weights for conv(msra) and norm in ConvModule
-    def init_weights(self):
-        """Initialize the weights of FPN module."""
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                xavier_init(m, distribution='uniform')
-
     def forward(self, inputs):
         """Forward function."""
         assert len(inputs) == len(self.in_channels)
@@ -232,7 +237,7 @@ class YOLOV4Neck(nn.Module):
 
 
 @NECKS.register_module()
-class YOLOV5Neck(nn.Module):
+class YOLOV5Neck(BaseModule):
     """Path Aggregation Network for Instance Segmentation.
 
     This is an implementation of the `PAFPN in Path Aggregation Network
@@ -272,9 +277,17 @@ class YOLOV5Neck(nn.Module):
                      type='BN', requires_grad=True, eps=0.001, momentum=0.03),
                  act_cfg=dict(type='Mish'),
                  csp_act_cfg=dict(type='Mish'),
-                 upsample_cfg=dict(mode='nearest')):
+                 upsample_cfg=dict(mode='nearest'),
+                 init_cfg=None):
 
-        super(YOLOV5Neck, self).__init__()
+        if init_cfg is None:
+            init_cfg = [
+                dict(type='Xavier', distribution='uniform', layer='Conv2d'),
+                dict(
+                    type='Constant', val=1, layer=['_BatchNorm', 'GroupNorm'])
+            ]
+
+        super(YOLOV5Neck, self).__init__(init_cfg)
 
         assert isinstance(in_channels, list)
         self.in_channels = in_channels
@@ -301,7 +314,11 @@ class YOLOV5Neck(nn.Module):
         self.start_level = start_level
         self.end_level = end_level
 
-        cfg = dict(norm_cfg=norm_cfg, act_cfg=act_cfg, csp_act_cfg=csp_act_cfg)
+        cfg = dict(
+            norm_cfg=norm_cfg,
+            act_cfg=act_cfg,
+            csp_act_cfg=csp_act_cfg,
+            init_cfg=init_cfg)
 
         # shrink channels count before upsample and concat
         self.pre_upsample_convs = nn.ModuleList()
@@ -379,15 +396,7 @@ class YOLOV5Neck(nn.Module):
             self.post_downsample_concat_csp.append(post_downcat_csp)
             to_output_channels.append(top_channels)
             current_channels = target_channels
-
         # yolov5 has no output 1x1 conv
-
-    # default init_weights for conv(msra) and norm in ConvModule
-    def init_weights(self):
-        """Initialize the weights of FPN module."""
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                xavier_init(m, distribution='uniform')
 
     def forward(self, inputs):
         """Forward function."""
