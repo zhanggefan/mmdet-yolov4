@@ -6,6 +6,7 @@ from mmcv.cnn import ConvModule
 from mmcv.cnn.bricks.activation import build_activation_layer
 from mmcv.cnn.bricks.norm import build_norm_layer
 from mmcv.runner import BaseModule
+from mmcv.runner.fp16_utils import auto_fp16
 from torch.nn.modules.batchnorm import _BatchNorm
 
 from ..builder import BACKBONES
@@ -451,6 +452,7 @@ class DarknetCSP(BaseModule):
         else:
             raise TypeError('pretrained must be a str or None')
 
+    @auto_fp16()
     def forward(self, x):
         outs = []
         for i, layer_name in enumerate(self.layers):

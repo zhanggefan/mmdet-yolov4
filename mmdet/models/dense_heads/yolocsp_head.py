@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import normal_init
 from mmcv.runner import force_fp32
+from mmcv.runner.fp16_utils import auto_fp16
 
 from mmdet.core import (build_anchor_generator, build_assigner,
                         build_bbox_coder, build_sampler, multi_apply,
@@ -199,6 +200,7 @@ class YOLOCSPHead(BaseDenseHead, BBoxTestMixin):
                                self.class_freq / self.class_freq.sum())  # cls
             m.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
+    @auto_fp16()
     def forward(self, feats):
         """Forward features from the upstream network.
 

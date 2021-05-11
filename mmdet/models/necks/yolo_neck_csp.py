@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.runner import BaseModule
+from mmcv.runner.fp16_utils import auto_fp16
 
 from ..backbones.darknetcsp import BottleneckCSP, BottleneckCSP2, Conv
 from ..builder import NECKS
@@ -185,6 +186,7 @@ class YOLOV4Neck(BaseModule):
                 **cfg)
             self.out_convs.append(out_conv)
 
+    @auto_fp16()
     def forward(self, inputs):
         """Forward function."""
         assert len(inputs) == len(self.in_channels)
@@ -398,6 +400,7 @@ class YOLOV5Neck(BaseModule):
             current_channels = target_channels
         # yolov5 has no output 1x1 conv
 
+    @auto_fp16()
     def forward(self, inputs):
         """Forward function."""
         assert len(inputs) == len(self.in_channels)

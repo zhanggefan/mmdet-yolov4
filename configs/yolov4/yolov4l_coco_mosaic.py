@@ -118,8 +118,7 @@ optimizer_config = dict(
     type='Fp16GradAccumulateOptimizerHook',
     nominal_batch_size=nominal_batch_size,
     grad_clip=dict(max_norm=35, norm_type=2),
-    loss_scale=dict(
-        init_scale=2**16, mode='dynamic', scale_factor=2., scale_window=1000))
+    loss_scale='dynamic')
 
 # learning policy
 lr_config = dict(
