@@ -18,6 +18,4 @@ data = dict(samples_per_gpu=16, workers_per_gpu=2)
 
 optimizer_config = dict(
     _delete_=True, grad_clip=dict(max_norm=35, norm_type=2))
-fp16 = dict(
-    loss_scale=dict(
-        init_scale=2**16, mode='dynamic', scale_factor=2., scale_window=1000))
+fp16 = dict(loss_scale='dynamic')

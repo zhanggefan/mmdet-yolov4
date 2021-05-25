@@ -319,17 +319,12 @@ class SPPV4Stage(BaseModule):
 
 class BottleneckStage(BaseModule):
 
-    def __init__(self,
-                 in_channels,
-                 out_channels,
-                 repetition,
-                 init_cfg=None,
-                 **kwargs):
+    def __init__(self, in_channels, out_channels, init_cfg=None, **kwargs):
         super(BottleneckStage, self).__init__(init_cfg)
         self.conv_downscale = Conv(
             in_channels, out_channels, kernel_size=3, stride=2, **kwargs)
-        self.conv_bottleneck = Bottleneck(out_channels, out_channels,
-                                          repetition, **kwargs)
+        self.conv_bottleneck = Bottleneck(out_channels, out_channels, True,
+                                          **kwargs)
 
     def forward(self, x):
         return self.conv_bottleneck(self.conv_downscale(x))
@@ -389,6 +384,7 @@ class DarknetCSP(BaseModule):
                  csp_act_cfg=dict(type='Mish'),
                  norm_eval=False,
                  pretrained=None,
+                 in_channels=3,
                  init_cfg=None):
         super(DarknetCSP, self).__init__(init_cfg)
 
@@ -409,17 +405,21 @@ class DarknetCSP(BaseModule):
             init_cfg=init_cfg)
 
         self.layers = []
-        cin = 3
+        cin = in_channels
         for i, (stg, rep, cout) in enumerate(zip(stage, repetition, channels)):
             layer_name = f'{stg}{i}'
             self.layers.append(layer_name)
             if stg == 'conv':
                 self.add_module(layer_name, Conv(cin, cout, 3, **cfg))
             elif stg == 'bottleneck':
-                self.add_module(layer_name,
-                                BottleneckStage(cin, cout, rep, **cfg))
+                self.add_module(layer_name, BottleneckStage(cin, cout, **cfg))
+            elif stg == 'bottleneck_no_downsample':
+                self.add_module(layer_name, Bottleneck(cin, cout, **cfg))
             elif stg == 'csp':
                 self.add_module(layer_name, CSPStage(cin, cout, rep, **cfg))
+            elif stg == 'csp_no_downsample':
+                self.add_module(layer_name,
+                                BottleneckCSP(cin, cout, rep, **cfg))
             elif stg == 'focus':
                 self.add_module(layer_name, Focus(cin, cout, 3, **cfg))
             elif stg == 'sppv4':

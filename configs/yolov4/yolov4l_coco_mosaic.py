@@ -148,7 +148,7 @@ custom_hooks = [
 
 runner = dict(type='EpochBasedRunner', max_epochs=300)
 
-evaluation = dict(interval=1, metric='bbox')
+evaluation = dict(interval=1, metric='fast-bbox')
 
 checkpoint_config = dict(interval=5)
 

@@ -24,7 +24,8 @@ train_pipeline = [
     dict(
         type='MosaicPipeline',
         individual_pipeline=[
-            dict(type='LoadImageFromFile', im_decode_backend='turbojpeg'),
+            dict(
+                type='LoadImageFromFile'),  # , im_decode_backend='turbojpeg'),
             dict(type='LoadAnnotations', with_bbox=True),
             dict(type='Resize', img_scale=(640, 640), keep_ratio=True),
         ],
@@ -149,7 +150,7 @@ custom_hooks = [
 
 runner = dict(type='EpochBasedRunner', max_epochs=300)
 
-evaluation = dict(interval=1, metric='bbox')
+evaluation = dict(interval=1, metric='fast-bbox')
 
 checkpoint_config = dict(interval=5)
 
