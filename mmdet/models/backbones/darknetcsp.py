@@ -225,7 +225,8 @@ class SPPV4(nn.Module):
 
 class Focus(nn.Module):
     # Focus wh information into c-space
-    # Implement with ordinary Conv2d with doubled kernel/padding size & stride 2
+    # Implement with ordinary Conv2d with doubled kernel/padding size
+    # with stride == 2
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -359,7 +360,8 @@ class DarknetCSP(nn.Module):
                      type='BN', requires_grad=True, eps=0.001, momentum=0.03),
                  act_cfg=dict(type='Mish'),
                  csp_act_cfg=dict(type='Mish'),
-                 norm_eval=False):
+                 norm_eval=False,
+                 in_channels=3):
         super(DarknetCSP, self).__init__()
 
         if isinstance(scale, str):
@@ -375,7 +377,7 @@ class DarknetCSP(nn.Module):
         cfg = dict(norm_cfg=norm_cfg, act_cfg=act_cfg, csp_act_cfg=csp_act_cfg)
 
         self.layers = []
-        cin = 3
+        cin = in_channels
         for i, (stg, rep, cout) in enumerate(zip(stage, repetition, channels)):
             layer_name = f'{stg}{i}'
             self.layers.append(layer_name)
@@ -386,6 +388,9 @@ class DarknetCSP(nn.Module):
                                 BottleneckStage(cin, cout, rep, **cfg))
             elif stg == 'csp':
                 self.add_module(layer_name, CSPStage(cin, cout, rep, **cfg))
+            elif stg == 'csp_no_downsample':
+                self.add_module(layer_name,
+                                BottleneckCSP(cin, cout, rep, **cfg))
             elif stg == 'focus':
                 self.add_module(layer_name, Focus(cin, cout, 3, **cfg))
             elif stg == 'sppv4':
