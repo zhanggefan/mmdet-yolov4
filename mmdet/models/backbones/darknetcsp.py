@@ -272,7 +272,10 @@ class SPPV5Stage(nn.Module):
         self.conv_downscale = Conv(
             in_channels, out_channels, kernel_size=3, stride=2, **kwargs)
         self.spp = SPPV5(
-            out_channels, out_channels, pooling_kernel_size=(5, 9, 13))
+            out_channels,
+            out_channels,
+            pooling_kernel_size=(5, 9, 13),
+            **kwargs)
         self.conv_csp = BottleneckCSP(out_channels, out_channels, repetition,
                                       **kwargs)
 
@@ -289,7 +292,10 @@ class SPPV4Stage(nn.Module):
         self.conv_csp = BottleneckCSP(out_channels * 2, out_channels * 2,
                                       repetition, **kwargs)
         self.spp = SPPV4(
-            out_channels * 2, out_channels, pooling_kernel_size=(5, 9, 13))
+            out_channels * 2,
+            out_channels,
+            pooling_kernel_size=(5, 9, 13),
+            **kwargs)
 
     def forward(self, x):
         return self.spp(self.conv_csp(self.conv_downscale(x)))
